@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>No solo las rosas decaen · 21 de diciembre</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23ff5c8f'/></svg>">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="stage">
+    <!-- Cartel 848 × 1200 px (A3 adaptado a pantalla) -->
+    <main class="poster" id="poster" aria-label="Cartel: No solo las rosas decaen">
+
+      <!-- Fondo: oscuridad y ojos turbios que miran al cerebro -->
+      <div class="layer layer--dark" id="darkLayer"></div>
+      <canvas class="layer layer--eyes" id="eyeCanvas"></canvas>
+
+      <!-- Capa 1: escena 3D (cerebro-rosa con three.js) -->
+      <div class="layer layer--scene" id="sceneLayer">
+        <canvas id="brainCanvas"></canvas>
+      </div>
+
+      <!-- Capa 2: cabecera (tema) -->
+      <div class="layer layer--meta" id="metaLayer">
+        <header class="meta-top">
+          <p class="topic">Enfermedades<br>neurodegenerativas</p>
+        </header>
+      </div>
+
+      <!-- Capa 3: titular (cada letra se genera desde main.js) -->
+      <div class="layer layer--title" id="titleLayer">
+        <h1 class="title" id="title" data-lines="No solo|las rosas|decaen.">No solo las rosas decaen.</h1>
+      </div>
+
+      <!-- Capa 4: pétalos que se desprenden de las letras -->
+      <canvas class="layer layer--petals" id="petalCanvas"></canvas>
+
+    </main>
+  </div>
+
+  <!-- three.js r128 en local: funciona abriendo el archivo directamente y sin conexión -->
+  <script src="lib/three.min.js"></script>
+  <script src="brain-points.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
