@@ -76,6 +76,7 @@ body {
 
 #brainCanvas,
 .layer--eyes,
+.layer--stare,
 .layer--petals {
   display: block;
   width: var(--poster-w);
@@ -84,6 +85,7 @@ body {
 
 .layer--dark,
 .layer--eyes,
+.layer--stare,
 .layer--scene,
 .layer--meta,
 .layer--petals {
@@ -103,6 +105,19 @@ body {
 
 .layer--petals {
   z-index: 4;
+}
+
+/* Los cristales tapan todo menos la cabecera, que no cambia */
+.layer--shatter {
+  display: block;
+  z-index: 5;
+  pointer-events: none;
+  width: var(--poster-w);
+  height: var(--poster-h);
+}
+
+.layer--meta {
+  z-index: 6;
 }
 
 /* ---------- Cabecera ---------- */

@@ -26,6 +26,9 @@ const CONFIG = {
   recoverMax: 0.18,     // máximo que puede recuperarse desde el peor punto
   witherPause: 0.6,     // segundos con el cerebro marchito antes de rebrotar
   regrowDuration: 3.5,  // segundos que tarda en volver a brotar
+  returnTransition: 'shatter', // vuelta al inicio: 'shatter' (cristal roto) o 'regrow' (rebrote)
+  shatterDuration: 2.6, // segundos que tardan en caer los cristales
+  stareDuration: 2,     // segundos que el ojo grande mira al frente antes de romperse el cristal
   fallPool: 300,        // pétalos 3D cayendo a la vez como máximo
   letterPetals: 12,     // pétalos 2D que suelta una letra al marchitarse entera
   maxFlatPetals: 700,
@@ -68,11 +71,17 @@ const petalCtx = petalCanvas.getContext('2d');
 const darkLayer = document.getElementById('darkLayer');
 const eyeCanvas = document.getElementById('eyeCanvas');
 const eyeCtx = eyeCanvas.getContext('2d');
+const shatterCanvas = document.getElementById('shatterCanvas');
+const stareCanvas = document.getElementById('stareCanvas');
+const stareCtx = stareCanvas.getContext('2d');
 
 /* ---------- Estado global ---------- */
 
 const state = {
-  phase: 'bloom',     // 'bloom' (florecido / decayendo) · 'withered' · 'regrow'
+  phase: 'bloom',     // 'bloom' (florecido / decayendo) · 'withered' · 'regrow' · 'shatter'
+  pendingShatter: false,
+  jolt: 0,            // sacudida fuerte al romperse el cristal
+  stare: 0,           // segundos que lleva abierto el ojo grande (0 = no hay ojo)
   phaseTime: 0,
   decay: 0,           // 0 = rosa sana · 1 = marchita
   peakDecay: 0,
@@ -750,12 +759,16 @@ function updateBrainPetals(dt) {
     let wilt = 0;     // marchitez 0..1
     let green = 0;    // brote verde 0..1
 
-    if (state.phase === 'regrow') {
+    if (state.phase === 'shatter') {
+      s = 1;   // bajo el cristal roto el cerebro ya está entero y rosa
+    } else if (state.phase === 'regrow') {
       s = smoothstep(sprout[i], sprout[i] + 0.14, petalT);
-      green = 1 - smoothstep(sprout[i] + 0.04, sprout[i] + 0.3, petalT);
+      // El verde tiene que haber desaparecido del todo al terminar el rebrote
+      green = 1 - smoothstep(sprout[i] + 0.04, Math.min(sprout[i] + 0.3, 1), petalT);
     } else if (state.phase === 'bloom') {
       const t = threshold[i];
-      wilt = smoothstep(t - 0.22, t, decay);
+      // Sin decadencia no hay marchitez, aunque el pétalo sea de los primeros en caer
+      wilt = smoothstep(Math.max(t - 0.22, 0), t, decay);
 
       if (st[i] !== GONE && decay >= t) {
         const current = st[i] === REGROWING ? easeOutCubic(Math.min(grow[i], 1)) : 1;
@@ -933,7 +946,20 @@ function updateCycle(dt) {
       setPhase('withered');
     }
   } else if (state.phase === 'withered') {
-    if (state.phaseTime >= CONFIG.witherPause) setPhase('regrow');
+    if (CONFIG.returnTransition === 'shatter') {
+      // Tras la pausa aparece el ojo grande; al terminar su mirada se rompe el cristal
+      // (justo después de dibujar este frame, ver animate)
+      const stareTime = state.phaseTime - CONFIG.witherPause;
+      state.stare = stareTime > 0 ? stareTime : 0;
+      if (stareTime >= CONFIG.stareDuration && !state.pendingShatter) state.pendingShatter = true;
+    } else if (state.phaseTime >= CONFIG.witherPause) {
+      setPhase('regrow');
+    }
+  } else if (state.phase === 'shatter') {
+    if (state.phaseTime >= CONFIG.shatterDuration) {
+      setPhase('bloom');
+      clearShards();
+    }
   } else {
     state.regrow = Math.min(1, state.phaseTime / CONFIG.regrowDuration);
     if (state.regrow >= 1) setPhase('bloom');
@@ -960,9 +986,12 @@ function updateParallax() {
 
 function setupEyeCanvas() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  eyeCanvas.width = POSTER_W * dpr;
-  eyeCanvas.height = POSTER_H * dpr;
+  [eyeCanvas, stareCanvas].forEach((c) => {
+    c.width = POSTER_W * dpr;
+    c.height = POSTER_H * dpr;
+  });
   eyeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  stareCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 // Zonas del cartel donde puede aparecer un ojo (rangos de x e y del centro y anchura máxima):
@@ -1158,8 +1187,10 @@ function updateEyes(dt) {
     eye.twitch.x *= 1 - Math.min(1, dt * 12);
     eye.twitch.y *= 1 - Math.min(1, dt * 12);
 
-    // Mirada: al cerebro, o todos a la vez al cursor durante la mirada colectiva
-    const target = glance.active > 0 ? state.pointer : state.brainScreen;
+    // Mirada: al cerebro, todos a la vez al cursor durante la mirada colectiva,
+    // o al frente mientras mira el ojo grande
+    let target = glance.active > 0 ? state.pointer : state.brainScreen;
+    if (state.stare > 0) target = eye;
     const dx = target.x - eye.x;
     const dy = target.y - eye.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -1179,13 +1210,513 @@ function updateEyes(dt) {
   });
 }
 
-// Temblor leve del cartel, más intenso cuanto más oscuro
-function updateShake() {
-  const amount = smoothstep(0.35, 1, state.darkness) * 2.5;
+// Ojo grande (recreación del ojo de referencia) donde estaba el cerebro, mirando al frente
+const STARE_EYE_W = 400;
+// El ojo se pinta primero en un lienzo aparte y luego se recorta con una máscara
+// irregular: así el blanco se funde con el negro de forma desigual, como en la referencia
+const stareBuffer = document.createElement('canvas');
+const stareBufCtx = stareBuffer.getContext('2d');
+const stareMask = document.createElement('canvas');
+const stareMaskCtx = stareMask.getContext('2d');
+
+// Capas de la máscara: almendras algo desplazadas y con distinto desenfoque.
+// Sumadas, el centro queda opaco y el borde se desvanece de forma desigual
+// (más extendido abajo a la izquierda, más corto arriba a la derecha).
+const STARE_MASK_LAYERS = [
+  { sw: 1.0, sh: 1.0, dx: 0, dy: 0, blur: 6, alpha: 0.7 },
+  { sw: 0.9, sh: 0.82, dx: -12, dy: 6, blur: 14, alpha: 0.5 },
+  { sw: 1.05, sh: 0.92, dx: -18, dy: 10, blur: 24, alpha: 0.35 },
+  { sw: 0.78, sh: 0.7, dx: -6, dy: 2, blur: 10, alpha: 0.6 },
+  { sw: 0.96, sh: 1.08, dx: 10, dy: -4, blur: 20, alpha: 0.25 },
+];
+
+// "Mordiscos" de sombra a lo largo del contorno (más en el párpado superior)
+const STARE_BITES = Array.from({ length: 10 }, (_, i) => ({
+  t: rand(0.12, 0.92),               // posición a lo largo del párpado
+  top: i < 7,
+  r: i < 7 ? rand(12, 26) : rand(8, 16),
+  alpha: i < 7 ? rand(0.25, 0.5) : rand(0.15, 0.3),
+  inset: rand(0.9, 1.05),            // cuánto se mete hacia dentro del ojo
+}));
+
+// Desplazamiento horizontal de la mirada: centrada mientras se abre y después
+// alterna izquierda / derecha cada 0,55 s con un salto rápido, como quien mira
+// primero un ojo y luego el otro de la persona que tiene delante
+function stareGazeX(w) {
+  const hold = 0.55;
+  const t = state.stare - 0.5;
+  if (t <= 0) return 0;
+  const step = Math.floor(t / hold);
+  const side = (n) => (n < 0 ? 0 : (n % 2 === 0 ? -1 : 1)) * w * 0.035;
+  const jump = smoothstep(0, 0.09, (t % hold) / hold);
+  return lerp(side(step - 1), side(step), jump);
+}
+
+function buildStareMask(x, y, w, h, open, dpr) {
+  if (stareMask.width !== stareBuffer.width) {
+    stareMask.width = stareBuffer.width;
+    stareMask.height = stareBuffer.height;
+  }
+  const m = stareMaskCtx;
+  m.setTransform(dpr, 0, 0, dpr, 0, 0);
+  m.globalCompositeOperation = 'source-over';
+  m.globalAlpha = 1;
+  m.filter = 'none';
+  m.clearRect(0, 0, POSTER_W, POSTER_H);
+  m.save();
+  m.translate(x, y);
+  m.fillStyle = '#000';
+
+  STARE_MASK_LAYERS.forEach((l) => {
+    m.filter = `blur(${l.blur}px)`;
+    m.globalAlpha = l.alpha;
+    m.save();
+    m.translate(l.dx, l.dy * open);
+    eyeAlmondPath(m, w * l.sw, h * l.sh);
+    m.fill();
+    m.restore();
+  });
+
+  // Mordiscos: la oscuridad se come trozos del contorno
+  m.globalCompositeOperation = 'destination-out';
+  m.filter = 'blur(8px)';
+  STARE_BITES.forEach((b) => {
+    // Punto sobre la curva del párpado (bezier cuadrática simétrica)
+    const bx = -w / 2 + b.t * w;
+    const by = (b.top ? -1 : 1) * 2 * b.t * (1 - b.t) * h * b.inset;
+    m.globalAlpha = b.alpha;
+    m.beginPath();
+    m.arc(bx, by, b.r * (0.6 + 0.4 * open), 0, Math.PI * 2);
+    m.fill();
+  });
+  m.restore();
+}
+
+function eyeAlmondPath(ctx, w, h) {
+  ctx.beginPath();
+  ctx.moveTo(-w / 2, 0);
+  ctx.quadraticCurveTo(0, -h, w / 2, 0);
+  ctx.quadraticCurveTo(0, h, -w / 2, 0);
+  ctx.closePath();
+}
+
+function drawStareEye(open, alpha) {
+  const w = STARE_EYE_W;
+  const h = w * 0.45 * open;   // alto del ojo abierto
+  if (h < 1) return;
+
+  if (stareBuffer.width !== stareCanvas.width) {
+    stareBuffer.width = stareCanvas.width;
+    stareBuffer.height = stareCanvas.height;
+  }
+  const dpr = stareBuffer.width / POSTER_W;
+  const ctx = stareBufCtx;
+
+  // Pequeño temblor y respiración de la pupila
+  const t = state.time;
+  const x = state.brainScreen.x + state.smooth.nx * 10 + Math.sin(t * 41) * 0.6;
+  const y = state.brainScreen.y + state.smooth.ny * 8 + Math.sin(t * 37 + 1) * 0.6;
+  const pupil = 1 + Math.sin(t * 2.2) * 0.03;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, POSTER_W, POSTER_H);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.filter = 'blur(1.5px)';   // aspecto turbio de la referencia
+
+  // Blanco gris claro, más luminoso a la izquierda y apagado en las comisuras
+  const sclera = ctx.createRadialGradient(-w * 0.14, -h * 0.05, 0, 0, 0, w * 0.55);
+  sclera.addColorStop(0, '#e2dfdf');
+  sclera.addColorStop(0.5, '#b4b0b0');
+  sclera.addColorStop(0.85, '#5a5757');
+  sclera.addColorStop(1, '#141313');
+  ctx.fillStyle = sclera;
+  ctx.fillRect(-w * 0.55, -h - 20, w * 1.1, h * 2 + 40);
+
+  // Sombra del párpado superior (más marcada a la derecha) y luz abajo a la izquierda
+  const lid = ctx.createRadialGradient(w * 0.12, -h * 0.75, 0, w * 0.12, -h * 0.75, w * 0.34);
+  lid.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
+  lid.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = lid;
+  ctx.fillRect(-w * 0.55, -h - 20, w * 1.1, h * 2 + 40);
+  const glow = ctx.createRadialGradient(-w * 0.26, h * 0.3, 0, -w * 0.26, h * 0.3, w * 0.22);
+  glow.addColorStop(0, 'rgba(255, 255, 255, 0.18)');
+  glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(-w * 0.55, -h - 20, w * 1.1, h * 2 + 40);
+
+  // Iris grande: núcleo negro y anillo gris oscuro que se funde con el blanco.
+  // Mira alternando entre los dos ojos de quien lo ve (salto rápido y pausa)
+  // y la pupila tiembla un poco.
+  const r = w * 0.24 * pupil;
+  const tremorX = (Math.random() - 0.5) * 1.8;
+  const tremorY = (Math.random() - 0.5) * 1.4;
+  const ix = w * 0.02 + stareGazeX(w) + tremorX;
+  const iy = tremorY;
+  const iris = ctx.createRadialGradient(ix, iy, 0, ix, iy, r);
+  iris.addColorStop(0, '#000');
+  iris.addColorStop(0.7, '#020202');
+  iris.addColorStop(0.86, '#2e2d2d');
+  iris.addColorStop(0.95, 'rgba(70, 68, 68, 0.6)');
+  iris.addColorStop(1, 'rgba(90, 88, 88, 0)');
+  ctx.fillStyle = iris;
+  ctx.beginPath();
+  ctx.arc(ix, iy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Dos brillos juntos en la parte alta de la pupila
+  ctx.filter = 'blur(1px)';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.beginPath();
+  ctx.arc(ix - r * 0.16, iy - r * 0.36, r * 0.055, 0, Math.PI * 2);
+  ctx.arc(ix + r * 0.14, iy - r * 0.36, r * 0.05, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Chispa de luz en el lagrimal derecho
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.beginPath();
+  ctx.arc(w * 0.4, h * 0.04, w * 0.012, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+
+  // Máscara irregular: solo queda lo que cae dentro de ella
+  buildStareMask(x, y, w, h, open, dpr);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.filter = 'none';
+  ctx.drawImage(stareMask, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+
+  stareCtx.globalAlpha = alpha;
+  stareCtx.drawImage(stareBuffer, 0, 0, POSTER_W, POSTER_H);
+  stareCtx.globalAlpha = 1;
+}
+
+let stareDrawn = false;
+
+function updateStare() {
+  if (state.stare <= 0) {
+    if (stareDrawn) {
+      stareCtx.clearRect(0, 0, POSTER_W, POSTER_H);
+      stareDrawn = false;
+    }
+    return;
+  }
+  // Se abre en medio segundo y se queda fijo mirando al frente
+  const open = easeOutCubic(smoothstep(0, 0.55, state.stare));
+  const alpha = smoothstep(0, 0.3, state.stare);
+  stareCtx.clearRect(0, 0, POSTER_W, POSTER_H);
+  drawStareEye(open, alpha);
+  stareDrawn = true;
+}
+
+// Temblor leve del cartel, más intenso cuanto más oscuro (y un golpe fuerte al romperse)
+function updateShake(dt) {
+  state.jolt *= 1 - Math.min(1, dt * 5);
+  const amount = smoothstep(0.35, 1, state.darkness) * 2.5 + state.jolt * 14;
   const t = state.time;
   const dx = (Math.sin(t * 47.3) + Math.sin(t * 31.7 + 1.3)) * 0.5 * amount;
   const dy = (Math.sin(t * 39.1 + 0.7) + Math.sin(t * 53.9)) * 0.5 * amount;
   poster.style.transform = `scale(${state.scale}) translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
+}
+
+/* ==========================================================
+   6c. VUELTA AL INICIO: la pantalla se rompe como un cristal
+   Se congela una imagen del cartel marchito, se parte en cristales
+   desde el punto de impacto y, mientras caen, debajo todo ya ha vuelto
+   a la normalidad. Los cristales se dibujan en la GPU con un shader de
+   "liquid glass" adaptado de liquidGL (MIT © NaughtyDuk,
+   https://github.com/naughtyduk/liquidGL): bisel, refracción,
+   aberración cromática y brillo especular.
+   ========================================================== */
+
+const snapshot = document.createElement('canvas');
+const snapCtx = snapshot.getContext('2d');
+const shards = [];
+const impact = { x: 0, y: 0 };
+let shatterRenderer, shatterScene, shatterCamera, snapTexture, glassMaterial;
+
+const GLASS_VERTEX = `
+  attribute vec2 aOrig;
+  attribute vec2 aDir;
+  attribute float aInner;
+  varying vec2 vOrig;
+  varying vec2 vDir;
+  varying float vInner;
+  void main() {
+    vOrig = aOrig;
+    vDir = aDir;
+    vInner = aInner;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const GLASS_FRAGMENT = `
+  uniform sampler2D uSnap;
+  uniform vec2 uSize;
+  uniform float uCrack;
+  uniform float uFlash;
+  uniform vec2 uImpact;
+  varying vec2 vOrig;
+  varying vec2 vDir;
+  varying float vInner;
+
+  void main() {
+    // Bisel: 1 en el borde del cristal y 0 hacia el centro (edgeFactor de liquidGL)
+    float edge = 1.0 - smoothstep(0.0, 0.32, vInner);
+    vec2 dir = normalize(vDir + vec2(0.0001));
+
+    // Refracción suave en todo el trozo y fuerte en el bisel (edge * refraction + edge^n * bevelDepth)
+    float amount = (edge * 0.005 + pow(edge, 6.0) * 0.025) * uCrack;
+    vec2 offset = vec2(dir.x, -dir.y) * amount;
+    vec2 uv = vec2(vOrig.x / uSize.x, 1.0 - vOrig.y / uSize.y) - offset;
+
+    // Aberración cromática: rojo y azul se separan a ambos lados del vector de refracción
+    vec2 chroma = offset * 0.8 * uCrack;
+    vec3 col;
+    col.r = texture2D(uSnap, uv - chroma).r;
+    col.g = texture2D(uSnap, uv).g;
+    col.b = texture2D(uSnap, uv + chroma).b;
+
+    // Brillo especular: borde iluminado desde arriba a la izquierda y una franja diagonal
+    float light = max(dot(dir, normalize(vec2(-0.6, -0.8))), 0.0);
+    float rim = pow(edge, 10.0) * (0.15 + 0.5 * light);
+    float sheen = 0.06 * smoothstep(0.12, 0.0, abs(fract((vOrig.x + vOrig.y) * 0.0016) - 0.5));
+    col += (rim + sheen + pow(edge, 4.0) * 0.025) * uCrack;
+
+    // Destello en el punto de impacto
+    col += uFlash * exp(-length(vOrig - uImpact) / 90.0);
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+function setupShatterCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  snapshot.width = POSTER_W * dpr;
+  snapshot.height = POSTER_H * dpr;
+
+  shatterRenderer = new THREE.WebGLRenderer({ canvas: shatterCanvas, antialias: true, alpha: true });
+  shatterRenderer.setPixelRatio(dpr);
+  shatterRenderer.setSize(POSTER_W, POSTER_H, false);
+  shatterRenderer.setClearColor(0x000000, 0);
+
+  shatterScene = new THREE.Scene();
+  // Cámara ortográfica en píxeles del cartel (y hacia abajo = negativa)
+  shatterCamera = new THREE.OrthographicCamera(0, POSTER_W, 0, -POSTER_H, -10, 10);
+
+  snapTexture = new THREE.CanvasTexture(snapshot);
+  snapTexture.minFilter = THREE.LinearFilter;
+  snapTexture.generateMipmaps = false;
+
+  glassMaterial = new THREE.ShaderMaterial({
+    vertexShader: GLASS_VERTEX,
+    fragmentShader: GLASS_FRAGMENT,
+    uniforms: {
+      uSnap: { value: snapTexture },
+      uSize: { value: new THREE.Vector2(POSTER_W, POSTER_H) },
+      uCrack: { value: 0 },
+      uFlash: { value: 0 },
+      uImpact: { value: new THREE.Vector2() },
+    },
+    side: THREE.DoubleSide,
+  });
+}
+
+// Dibuja en un canvas lo que se ve ahora mismo (fondo, ojos, cerebro, titular y pétalos)
+function buildSnapshot() {
+  const dpr = snapshot.width / POSTER_W;
+  const ctx = snapCtx;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#040203';
+  ctx.fillRect(0, 0, POSTER_W, POSTER_H);
+
+  ctx.filter = 'blur(0.6px)';
+  ctx.drawImage(eyeCanvas, 0, 0, POSTER_W, POSTER_H);
+  ctx.filter = 'none';
+
+  // El canvas WebGL se copia justo después de renderizar
+  renderer.render(scene, camera);
+  ctx.drawImage(brainCanvas, state.smooth.nx * 10, state.smooth.ny * 8, POSTER_W, POSTER_H);
+  ctx.drawImage(stareCanvas, 0, 0, POSTER_W, POSTER_H);
+
+  // Las letras del titular, tal y como están (finas, caídas e inclinadas)
+  const posterRect = poster.getBoundingClientRect();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  letters.forEach((letter) => {
+    const r = letter.glyph.getBoundingClientRect();
+    const v = letter.value;
+    ctx.save();
+    ctx.translate(
+      (r.left - posterRect.left + r.width / 2) / state.scale,
+      (r.top - posterRect.top + r.height / 2) / state.scale,
+    );
+    ctx.rotate((v * letter.tilt * Math.PI) / 180);
+    ctx.font = `${Math.round(900 - 800 * v)} 122px Archivo, sans-serif`;
+    ctx.fontStretch = v > 0.5 ? 'semi-condensed' : 'normal';
+    ctx.globalAlpha = parseFloat(letter.glyph.style.opacity || '1');
+    ctx.fillStyle = letter.glyph.style.color || '#ff5c8f';
+    ctx.fillText(letter.glyph.textContent, 0, 0);
+    ctx.restore();
+  });
+
+  ctx.drawImage(petalCanvas, 0, 0, POSTER_W, POSTER_H);
+  snapTexture.needsUpdate = true;
+}
+
+// Geometría de un cristal: abanico de triángulos desde su centro.
+// aInner = 1 en el centro y 0 en el borde (para el bisel); aDir apunta hacia el borde.
+function createShardGeometry(points, cx, cy) {
+  const positions = [];
+  const orig = [];
+  const dirs = [];
+  const inner = [];
+  const pushVertex = (x, y, isCentre) => {
+    positions.push(x - cx, -(y - cy), 0);
+    orig.push(x, y);
+    dirs.push(x - cx, y - cy);
+    inner.push(isCentre ? 1 : 0);
+  };
+  points.forEach((p, i) => {
+    const q = points[(i + 1) % points.length];
+    pushVertex(cx, cy, true);
+    pushVertex(p[0], p[1], false);
+    pushVertex(q[0], q[1], false);
+  });
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('aOrig', new THREE.Float32BufferAttribute(orig, 2));
+  geometry.setAttribute('aDir', new THREE.Float32BufferAttribute(dirs, 2));
+  geometry.setAttribute('aInner', new THREE.Float32BufferAttribute(inner, 1));
+  return geometry;
+}
+
+function addShard(points) {
+  const cx = points.reduce((sum, p) => sum + p[0], 0) / points.length;
+  const cy = points.reduce((sum, p) => sum + p[1], 0) / points.length;
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+  const outside = Math.max(...xs) < 0 || Math.min(...xs) > POSTER_W
+    || Math.max(...ys) < 0 || Math.min(...ys) > POSTER_H;
+  if (outside) return;
+
+  const dx = cx - impact.x;
+  const dy = cy - impact.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const mesh = new THREE.Mesh(createShardGeometry(points, cx, cy), glassMaterial);
+  mesh.frustumCulled = false;
+  shatterScene.add(mesh);
+
+  shards.push({
+    mesh,
+    cx, cy,
+    dirX: dx / dist,
+    dirY: dy / dist,
+    x: 0, y: 0, rot: 0,
+    vx: (dx / dist) * rand(30, 150),
+    vy: rand(-140, -20),
+    vrot: rand(-2.5, 2.5),
+    delay: 0.25 + (dist / 900) * 0.35 + rand(0, 0.12),  // cerca del impacto caen antes
+  });
+}
+
+function clearShards() {
+  shards.forEach((s) => {
+    shatterScene.remove(s.mesh);
+    s.mesh.geometry.dispose();
+  });
+  shards.length = 0;
+  shatterRenderer.render(shatterScene, shatterCamera);   // deja el canvas vacío
+}
+
+// Grietas radiales desde el impacto + anillos irregulares → unos 100 trozos de cristal
+function createShards() {
+  clearShards();
+  const rays = 12;
+  const rings = [0, 40, 110, 210, 340, 520, 760, 1100, 1700];
+  const angles = [];
+  for (let j = 0; j < rays; j++) angles.push((j / rays) * Math.PI * 2 + rand(-0.2, 0.2));
+  const jitter = rings.map((r, k) => angles.map(() => (k === rings.length - 1 ? 1 : rand(0.82, 1.18))));
+
+  const point = (k, j) => {
+    const a = angles[j % rays];
+    const r = rings[k] * jitter[k][j % rays];
+    return [impact.x + Math.cos(a) * r, impact.y + Math.sin(a) * r];
+  };
+
+  for (let k = 0; k < rings.length - 1; k++) {
+    for (let j = 0; j < rays; j++) {
+      if (k === 0) {
+        addShard([point(0, j), point(1, j), point(1, j + 1)]);
+      } else if (Math.random() < 0.35) {
+        // A veces el trozo se parte en dos triángulos
+        addShard([point(k, j), point(k + 1, j), point(k + 1, j + 1)]);
+        addShard([point(k, j), point(k + 1, j + 1), point(k, j + 1)]);
+      } else {
+        addShard([point(k, j), point(k + 1, j), point(k + 1, j + 1), point(k, j + 1)]);
+      }
+    }
+  }
+}
+
+function startShatter() {
+  // El cristal se rompe desde el ojo grande
+  impact.x = state.brainScreen.x + state.smooth.nx * 10;
+  impact.y = state.brainScreen.y + state.smooth.ny * 8;
+  buildSnapshot();
+  state.stare = 0;
+  updateStare();
+  createShards();
+  glassMaterial.uniforms.uImpact.value.set(impact.x, impact.y);
+  state.jolt = 1;
+
+  // Debajo del cristal todo vuelve a la normalidad al instante
+  state.phase = 'shatter';
+  state.phaseTime = 0;
+  state.decay = 0;
+  state.peakDecay = 0;
+  state.regrow = 1;
+  petals.state.fill(ATTACHED);
+  fallCount = 0;
+  fallMesh.count = 0;
+  flatPetals.length = 0;
+  letters.forEach((letter) => {
+    letter.value = 0;
+    letter.lastValue = -1;
+    letter.shed = 0;
+    letter.absorb = 0;
+  });
+}
+
+function updateShatter(dt) {
+  if (state.phase !== 'shatter') return;
+
+  const t = state.phaseTime;
+  const crack = smoothstep(0, 0.2, t);   // las grietas aparecen antes de caer
+  glassMaterial.uniforms.uCrack.value = crack;
+  glassMaterial.uniforms.uFlash.value = 0.8 * Math.max(0, 1 - t / 0.4);
+
+  shards.forEach((s) => {
+    if (t > s.delay) {
+      s.vy += 1600 * dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.rot += s.vrot * dt;
+    }
+    s.mesh.visible = s.cy + s.y < POSTER_H + 300;
+
+    // Al agrietarse, los trozos se separan un par de píxeles del impacto
+    const gap = crack * 2;
+    s.mesh.position.set(s.cx + s.x + s.dirX * gap, -(s.cy + s.y + s.dirY * gap), 0);
+    s.mesh.rotation.z = -s.rot;
+  });
+
+  shatterRenderer.render(shatterScene, shatterCamera);
 }
 
 /* ==========================================================
@@ -1250,12 +1781,18 @@ function animate() {
   updateDarkness();
   updateBrainScreen();
   updateEyes(dt);
-  updateShake();
+  updateStare();
+  updateShake(dt);
   updateParallax();
   updateLetters(dt);
   updateFlatPetals(dt);
+  updateShatter(dt);
 
   renderer.render(scene, camera);
+  if (state.pendingShatter) {
+    state.pendingShatter = false;
+    startShatter();
+  }
   requestAnimationFrame(animate);
 }
 
@@ -1264,6 +1801,7 @@ function init() {
   buildTitle();
   setupPetalCanvas();
   setupEyeCanvas();
+  setupShatterCanvas();
   createEyes();
   initScene();
 

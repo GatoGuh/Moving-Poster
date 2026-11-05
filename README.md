@@ -10,7 +10,7 @@ Formato vertical de **848 × 1200 px** (A3 adaptado a pantalla). Si la ventana e
 
 Un cerebro en 3D formado por miles de pétalos rosas se sostiene sobre un tallo de papiroflexia (tramos rectos y hojas plegadas), como si fuera una rosa. Mientras el cursor permanece sobre el cartel, la flor se marchita: los pétalos se oscurecen y se desprenden, el tallo se seca y la "cabeza" se inclina. El titular **"No solo las rosas decaen"** se deshoja con ella: sus letras gruesas sueltan pétalos y se vuelven finas y frágiles. A la vez, el fondo se apaga hasta el negro, el cartel empieza a temblar levemente y en la oscuridad se abren ojos turbios que observan el cerebro, como la mirada impotente de quienes acompañan la enfermedad.
 
-Las enfermedades neurodegenerativas (alzhéimer, párkinson, ELA…) actúan igual: apagan poco a poco la memoria, el movimiento y la identidad. Cuando el cerebro se marchita del todo, **vuelve a brotar** desde el tallo como una planta y las letras recuperan su grosor: el ciclo cierra con esperanza.
+Las enfermedades neurodegenerativas (alzhéimer, párkinson, ELA…) actúan igual: apagan poco a poco la memoria, el movimiento y la identidad. Cuando el cerebro se marchita del todo, en su lugar se abre un **ojo** que mira fijamente a quien observa el cartel, alternando entre sus dos ojos. Dos segundos después, **la pantalla se rompe como un cristal** desde ese ojo: los cristales caen y, debajo, todo ha vuelto a florecer.
 
 ## Cómo ejecutarlo
 
@@ -20,11 +20,13 @@ Abre `index.html` en el navegador con doble clic. No necesita servidor ni conexi
 
 | Archivo | Contenido |
 | --- | --- |
-| `index.html` | Estructura del cartel en capas: escena 3D, cabecera, titular y lienzo de pétalos. |
+| `index.html` | Estructura del cartel en capas: fondo y ojos, escena 3D, ojo grande, titular, pétalos, cristales y cabecera. |
 | `style.css` | Maquetación, tipografía sin serifa (Archivo variable + Inter Tight) y paleta. |
 | `main.js` | Escena three.js, sistema de pétalos, ciclo de vida y eventos de ratón. |
 | `brain-points.js` | Nube de puntos del cerebro (14.481 vértices), convertida del modelo `brain_vertex_low.obj` de [victors1681/3dbrain](https://github.com/victors1681/3dbrain). |
 | `lib/three.min.js` | three.js r128. |
+
+Los cristales de la pantalla rota usan un shader de *liquid glass* (bisel, refracción, aberración cromática y brillo especular) adaptado de [liquidGL](https://github.com/naughtyduk/liquidGL) (MIT © NaughtyDuk).
 
 ## Eventos de JavaScript
 
@@ -62,5 +64,8 @@ Todas las interacciones se registran con `addEventListener()`; no se usa `:hover
 1. **Florecido**: cerebro rosa y letras gruesas.
 2. **Decadencia** (solo con el cursor encima): los pétalos se marchitan y caen a cachos; las letras adelgazan.
 3. **Marchito**: solo queda el "esqueleto" del cerebro, una nube de puntos tenue, rodeado de ojos sobre fondo negro.
-4. **Rebrote** (automático): el tallo crece, los pétalos brotan en verde de abajo arriba y se tiñen de rosa, las letras se repueblan y los ojos se cierran mientras vuelve el color.
-5. Vuelta al estado 1.
+4. **La mirada** (2 s): donde estaba el cerebro se abre un ojo grande que mira al frente, alternando de izquierda a derecha como si mirara a los ojos del espectador, con la pupila temblando. Los ojos del fondo también miran al frente.
+5. **Cristal roto** (automático): la imagen se agrieta desde el ojo y los cristales caen girando; debajo, el cerebro vuelve a estar rosa, las letras gruesas y el fondo granate.
+6. Vuelta al estado 1.
+
+Como alternativa, en `CONFIG` de `main.js` se puede poner `returnTransition: 'regrow'` para que, en vez de romperse el cristal, el cerebro vuelva a brotar desde el tallo como una planta.
