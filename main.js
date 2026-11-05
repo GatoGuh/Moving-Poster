@@ -1565,7 +1565,49 @@ function buildSnapshot() {
   });
 
   ctx.drawImage(petalCanvas, 0, 0, POSTER_W, POSTER_H);
+  drawHeaderSnapshot(ctx, posterRect);
   snapTexture.needsUpdate = true;
+}
+
+// La cabecera (tema, fecha y línea) también forma parte del cristal que se rompe
+function drawHeaderSnapshot(ctx, posterRect) {
+  const toPoster = (r) => ({
+    left: (r.left - posterRect.left) / state.scale,
+    right: (r.right - posterRect.left) / state.scale,
+    top: (r.top - posterRect.top) / state.scale,
+    bottom: (r.bottom - posterRect.top) / state.scale,
+  });
+  const header = document.querySelector('.meta-top');
+  const topic = document.querySelector('.topic');
+  const date = document.querySelector('.date');
+  const ink = getComputedStyle(topic).color;
+  const rose = getComputedStyle(document.querySelector('.date__day')).color;
+
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.font = '600 15px "Inter Tight", system-ui, sans-serif';
+  ctx.letterSpacing = '2.7px';   // 0.18em
+  ctx.textBaseline = 'middle';
+  const lineHeight = 15 * 1.3;
+
+  const t = toPoster(topic.getBoundingClientRect());
+  ctx.textAlign = 'left';
+  ctx.fillStyle = ink;
+  ['ENFERMEDADES', 'NEURODEGENERATIVAS'].forEach((line, i) => {
+    ctx.fillText(line, t.left, t.top + lineHeight * (i + 0.5));
+  });
+
+  const d = toPoster(date.getBoundingClientRect());
+  ctx.textAlign = 'right';
+  ctx.fillStyle = rose;
+  ctx.fillText('21', d.right + 2.7, d.top + lineHeight * 0.5);
+  ctx.fillStyle = ink;
+  ctx.fillText('DE DICIEMBRE', d.right + 2.7, d.top + lineHeight * 1.5);
+
+  const hd = toPoster(header.getBoundingClientRect());
+  ctx.fillStyle = 'rgba(246, 223, 230, 0.22)';
+  ctx.fillRect(hd.left, hd.bottom - 1, hd.right - hd.left, 1);
+  ctx.restore();
 }
 
 // Geometría de un cristal: abanico de triángulos desde su centro.

@@ -107,17 +107,13 @@ body {
   z-index: 4;
 }
 
-/* Los cristales tapan todo menos la cabecera, que no cambia */
+/* Los cristales tapan todo el cartel, cabecera incluida */
 .layer--shatter {
   display: block;
   z-index: 5;
   pointer-events: none;
   width: var(--poster-w);
   height: var(--poster-h);
-}
-
-.layer--meta {
-  z-index: 6;
 }
 
 /* ---------- Cabecera ---------- */
