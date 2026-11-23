@@ -1,18 +1,26 @@
 'use strict';
 
 /* ==========================================================
-   No solo las rosas decaen · 21 de diciembre
-   Cartel interactivo sobre enfermedades neurodegenerativas.
+   Que empiece el juego para todos · 21 de diciembre · Fundación ITACA
+   Cartel interactivo de sensibilización: donar dinero para comprar
+   regalos de Navidad a niños y niñas en riesgo de exclusión.
+   De una caja de regalo abierta sale un circuito de coches de
+   juguete; cada coche que entra en la caja es un regalo entregado.
 
    Eventos de ratón:
-   · mouseenter (cartel)  → empieza la decadencia del cerebro-rosa: el fondo
-                            se oscurece, aparecen ojos y el cartel tiembla.
-   · mouseleave (cartel)  → la decadencia se pausa y se recupera un poco.
-   · mousemove  (cartel)  → el cerebro gira hacia el cursor, las capas
-                            se desplazan (paralaje) y las letras cercanas
-                            al cursor se deshojan antes.
-   · mouseenter (letra)   → la letra se hincha, brilla y suelta pétalos.
-   · mouseleave (letra)   → la letra vuelve a su estado inicial.
+   · mouseenter (cartel)  → semáforo de salida y los coches arrancan:
+                            bajan por el bucle y se meten en la caja.
+   · mouseleave (cartel)  → si aún no han salido, se cancela la salida;
+                            si ya corren, terminan la carrera y vuelven
+                            a la línea de salida sin volver a arrancar.
+   · mousemove  (cartel)  → la cámara gira con el cursor y las capas de
+                            texto se desplazan (paralaje).
+   · mouseenter / mouseleave (mensaje y logos) → el mensaje crece y se
+                            ilumina; los logos recuperan su color.
+   · mouseenter / mouseleave (pedales laterales) → turbo: se pisa el pedal y el
+                            coche de ese color acelera mientras el ratón esté encima.
+   · mouseenter / mouseleave (letras del titular) → cada letra salta, se
+                            ladea y cambia de color; al salir vuelve con rebote.
    ========================================================== */
 
 /* ---------- Configuración ---------- */
@@ -21,42 +29,58 @@ const POSTER_W = 848;
 const POSTER_H = 1200;
 
 const CONFIG = {
-  decayDuration: 5,     // segundos de hover para marchitarse del todo
-  recoverSpeed: 0.08,   // recuperación por segundo cuando el ratón sale
-  recoverMax: 0.18,     // máximo que puede recuperarse desde el peor punto
-  witherPause: 0.6,     // segundos con el cerebro marchito antes de rebrotar
-  regrowDuration: 3.5,  // segundos que tarda en volver a brotar
-  returnTransition: 'shatter', // vuelta al inicio: 'shatter' (cristal roto) o 'regrow' (rebrote)
-  shatterDuration: 2.6, // segundos que tardan en caer los cristales
-  stareDuration: 2,     // segundos que el ojo grande mira al frente antes de romperse el cristal
-  fallPool: 300,        // pétalos 3D cayendo a la vez como máximo
-  letterPetals: 12,     // pétalos 2D que suelta una letra al marchitarse entera
-  maxFlatPetals: 700,
+  countdownStep: 0.42, // segundos entre cada luz roja del semáforo
+  goHold: 0.9,         // segundos que se ve la luz verde
+  baseSpeed: 8.6,      // velocidad punta de los coches (unidades / s)
+  accel: 6.5,          // aceleración en la salida
+  insidePause: 0.9,    // segundos con los coches dentro de la caja antes de volver a salir
+  climbSpeed: 7.2,     // velocidad al salir de la caja por la subida exterior
+  relaunchPause: 0.3,  // espera antes del semáforo al volver a entrar con el ratón
+  boostGain: 0.75,     // turbo: cuánto más rápido va un coche con el ratón en su zona lateral
+  boostEase: 5,        // rapidez con la que entra y sale el turbo
 };
 
-const BRAIN_SCALE = 1.15;
-const PETAL_SPACING = 8;  // un pétalo por celda de 8 × 8 × 8 del modelo
-const BRAIN_BASE_ROT_Y = -Math.PI / 2 + 0.5;
-const STEM_TOP_Y = -110;
+const TRACK = {
+  width: 0.8,     // ancho de la pista (dos carriles)
+  thickness: 0.07,
+  kerb: 0.07,     // ancho del bordillo rojo y blanco
+  kerbHeight: 0.045,
+  // Circuito simétrico con un looping a cada lado (ver buildPathPoints)
+  yTop: 5.0,      // altura de la salida (al fondo)
+  yLow: 1.3,      // altura de la punta, dentro de la caja
+  legX: 0.66,     // separación de las patas al pasar por la boca de la caja (a cada lado)
+  zFront: 0.5,    // punta del circuito (dentro de la caja)
+  loop: { cx: 1.7, cz: -3.3, r: 1.1, turns: 1.25 }, // looping de la derecha (el otro es su reflejo)
+  flatLen: 1.4,   // tramo llano a cada lado del centro de la salida
+  heightCurve: 0.3, // 0 = pendiente constante; 1 = arranca y llega en llano
+  startArc: 1.0,  // distancia del principio del circuito al centro de la salida
+  samples: 1500,
+};
+
+const PARK_S = 0.6;   // posición de los coches aparcados (arco desde el inicio)
+const START_S = 1.1;  // línea de salida
+const LANE = TRACK.width / 4;
+
+const BOX = { half: 1.3, height: 1.9, wall: 0.06, voidY: 1.4 }; // voidY: fondo oscuro del interior
 
 const COLORS = {
-  roseDeep: new THREE.Color('#ff2a6d'),
-  roseLight: new THREE.Color('#ffb3c9'),
-  wilt: new THREE.Color('#5e3634'),
-  dead: new THREE.Color('#2b1d1a'),
-  sprout: new THREE.Color('#9ad66f'),
-  stem: new THREE.Color('#3d7d3a'),
-  stemDead: new THREE.Color('#3b2a1e'),
+  red: '#e8233f',
+  redInner: '#2a060c',
+  boxVoid: '#030102',
+  gold: '#ffc93c',
+  ink: '#f7efe0',
+  asphalt: '#2e313a',
+  plastic: '#3f4457',
 };
 
-// Colores de las letras (RGB para mezclarlos en CSS)
-const LETTER_ROSE = [255, 92, 143];
-const LETTER_WILT = [150, 112, 118];
+const CARS = [
+  // Parrilla escalonada: el morado sale un poco por delante para que se vean los dos
+  // boostZone: id de la zona lateral que le da turbo (rosa a la izquierda, morado a la derecha)
+  { name: 'rosa', color: '#ff5fa8', stripe: '#f7efe0', trail: '#ff8cc6', lane: -LANE, grid: -0.3, boostZone: 'boostLeft' },
+  { name: 'morado', color: '#8a4dff', stripe: '#f7efe0', trail: '#b18cff', lane: LANE, grid: 0.12, boostZone: 'boostRight' },
+];
 
-// Estados de cada pétalo del cerebro
-const ATTACHED = 0;
-const GONE = 1;
-const REGROWING = 2;
+const CONFETTI_COLORS = ['#ffc93c', '#e8233f', '#f7efe0', '#1fa8ff', '#3ee07a', '#ff7ab6'];
 
 /* ---------- Referencias al DOM ---------- */
 
@@ -64,82 +88,2027 @@ const poster = document.getElementById('poster');
 const sceneLayer = document.getElementById('sceneLayer');
 const metaLayer = document.getElementById('metaLayer');
 const titleLayer = document.getElementById('titleLayer');
+const footLayer = document.getElementById('footLayer');
+const canvas = document.getElementById('sceneCanvas');
+const hintEl = document.getElementById('hint');
+const lightEls = Array.from(document.querySelectorAll('.light'));
+const messageEl = document.getElementById('message');
+const messageClaimEl = messageEl.querySelector('.message__claim');
+const giftCountEl = document.getElementById('giftCount');
+const partnerEls = Array.from(document.querySelectorAll('.partner'));
 const titleEl = document.getElementById('title');
-const brainCanvas = document.getElementById('brainCanvas');
-const petalCanvas = document.getElementById('petalCanvas');
-const petalCtx = petalCanvas.getContext('2d');
-const darkLayer = document.getElementById('darkLayer');
-const eyeCanvas = document.getElementById('eyeCanvas');
-const eyeCtx = eyeCanvas.getContext('2d');
-const shatterCanvas = document.getElementById('shatterCanvas');
-const stareCanvas = document.getElementById('stareCanvas');
-const stareCtx = stareCanvas.getContext('2d');
 
-/* ---------- Estado global ---------- */
+/* ---------- Estado ---------- */
 
 const state = {
-  phase: 'bloom',     // 'bloom' (florecido / decayendo) · 'withered' · 'regrow' · 'shatter'
-  pendingShatter: false,
-  jolt: 0,            // sacudida fuerte al romperse el cristal
-  stare: 0,           // segundos que lleva abierto el ojo grande (0 = no hay ojo)
-  phaseTime: 0,
-  decay: 0,           // 0 = rosa sana · 1 = marchita
-  peakDecay: 0,
-  regrow: 0,          // progreso del rebrote 0..1
-  darkness: 0,        // 0 = fondo granate · 1 = negro, ojos abiertos y temblor
-  brainScreen: { x: POSTER_W / 2, y: POSTER_H * 0.6 },
-  hovering: false,
   scale: 1,
-  pointer: { x: POSTER_W / 2, y: POSTER_H / 2, nx: 0, ny: 0 },
-  smooth: { nx: 0, ny: 0 },
-  titleOffset: { x: 0, y: 0 },
+  hover: false,
+  mouse: { x: 0, y: 0 },   // -1 … 1 respecto al centro del cartel
+  smooth: { x: 0, y: 0 },
+  phase: 'parked',          // parked → countdown → racing → inside → climbing → …
+  phaseTime: 99,
+  raceTime: 0,
+  winner: null,
+  gifts: 0,                 // regalos entregados (coches que han entrado en la caja)
   time: 0,
 };
 
-const letters = [];
-const letterByEl = new Map();
-const flatPetals = [];
-const eyes = [];
+/* ---------- Preferencias del dispositivo ---------- */
+
+// «Reducir movimiento» activado en el sistema: menos confeti, nieve quieta, sin paralaje
+// ni temblores; la carrera (el contenido del cartel) sigue igual
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Pantalla táctil sin ratón: se juega tocando
+const TOUCH_ONLY = window.matchMedia('(hover: none)').matches;
 
 /* ---------- Utilidades ---------- */
 
-const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+const V3 = THREE.Vector3;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const lerp = (a, b, t) => a + (b - a) * t;
-const rand = (min, max) => min + Math.random() * (max - min);
-const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
-
-function smoothstep(edge0, edge1, x) {
-  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+const rand = (a, b) => a + Math.random() * (b - a);
+const smoothstep = (a, b, v) => {
+  const t = clamp((v - a) / (b - a), 0, 1);
   return t * t * (3 - 2 * t);
-}
+};
 
-function mixRGB(a, b, t, alpha = 1) {
-  const r = Math.round(lerp(a[0], b[0], t));
-  const g = Math.round(lerp(a[1], b[1], t));
-  const bl = Math.round(lerp(a[2], b[2], t));
-  return `rgba(${r}, ${g}, ${bl}, ${alpha})`;
-}
-
-// Convierte unos valores en su posición relativa (0..1) para repartirlos de forma uniforme
-function rankNormalize(values) {
-  const order = Array.from(values.keys()).sort((a, b) => values[a] - values[b]);
-  const out = new Float32Array(values.length);
-  order.forEach((index, rank) => {
-    out[index] = rank / (values.length - 1);
-  });
-  return out;
-}
-
-/* ==========================================================
-   1. ESCALADO DEL CARTEL
-   ========================================================== */
+/* ---------- Escalado del cartel ---------- */
 
 function fitPoster() {
   state.scale = Math.min(window.innerWidth / POSTER_W, window.innerHeight / POSTER_H, 1);
   poster.style.transform = `scale(${state.scale})`;
 }
 
-// Pasa coordenadas de pantalla a coordenadas internas del cartel (848 × 1200)
+/* ---------- Renderizador, cámara y luces ---------- */
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(POSTER_W, POSTER_H, false);
+renderer.setClearColor(0x000000, 0);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(28, POSTER_W / POSTER_H, 0.1, 100);
+const CAM_BASE = new V3(0, 11.5, 22);
+const CAM_LOOK = new V3(-0.1, 4.45, 0);
+camera.position.copy(CAM_BASE);
+camera.lookAt(CAM_LOOK);
+
+scene.add(new THREE.HemisphereLight(0xdfe6ff, 0x2a1d3a, 0.75));
+
+const keyLight = new THREE.DirectionalLight(0xfff4e0, 0.95);
+keyLight.position.set(4.5, 13, 7);
+keyLight.target.position.set(0, 3, 0);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.left = -6;
+keyLight.shadow.camera.right = 6;
+keyLight.shadow.camera.top = 7;
+keyLight.shadow.camera.bottom = -5;
+keyLight.shadow.camera.near = 2;
+keyLight.shadow.camera.far = 30;
+keyLight.shadow.bias = -0.0006;
+scene.add(keyLight, keyLight.target);
+
+const rimLight = new THREE.DirectionalLight(0x7f9bff, 0.45);
+rimLight.position.set(-6, 5, -6);
+scene.add(rimLight);
+
+// Brillo cálido que sale del interior de la caja
+const boxGlow = new THREE.PointLight(0xffc35a, 0.8, 5, 2);
+boxGlow.position.set(0, 1.3, 0);
+scene.add(boxGlow);
+
+// Suelo invisible que solo recoge sombras
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(30, 30),
+  new THREE.ShadowMaterial({ opacity: 0.38 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.01; // un pelo por debajo de la base de la caja para que no parpadee
+floor.receiveShadow = true;
+scene.add(floor);
+
+/* ---------- Texturas dibujadas en canvas ---------- */
+
+function canvasTexture(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+// Asfalto con dos ranuras (una por carril) y sus raíles metálicos
+const roadTexture = canvasTexture(256, 256, (g, w, h) => {
+  g.fillStyle = COLORS.asphalt;
+  g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 2600; i++) {
+    const v = (38 + Math.random() * 30) | 0;
+    g.fillStyle = `rgba(${v},${v},${v + 8},0.55)`;
+    g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6);
+  }
+  g.fillStyle = '#ece6d8';
+  g.fillRect(10, 0, 5, h);
+  g.fillRect(w - 15, 0, 5, h);
+  for (const x of [64, 192]) {
+    g.fillStyle = '#c3c7d2';
+    g.fillRect(x - 10, 0, 20, h);
+    g.fillStyle = '#08090d';
+    g.fillRect(x - 4, 0, 8, h);
+  }
+  g.fillStyle = 'rgba(236,230,216,0.55)';
+  g.fillRect(126, 0, 4, h * 0.45);
+});
+
+// Bordillo rojo y blanco
+const kerbTexture = canvasTexture(4, 64, (g, w, h) => {
+  g.fillStyle = COLORS.red;
+  g.fillRect(0, 0, w, h / 2);
+  g.fillStyle = '#f7efe0';
+  g.fillRect(0, h / 2, w, h / 2);
+});
+
+// Cuadros de la línea de salida
+const checkerTexture = canvasTexture(64, 16, (g, w, h) => {
+  const s = 8;
+  for (let y = 0; y < h / s; y++) {
+    for (let x = 0; x < w / s; x++) {
+      g.fillStyle = (x + y) % 2 ? '#111' : '#f7efe0';
+      g.fillRect(x * s, y * s, s, s);
+    }
+  }
+});
+checkerTexture.magFilter = THREE.NearestFilter;
+
+/* ---------- Trazado del circuito ---------- */
+
+// Circuito simétrico con un looping a cada lado, como dos muelles:
+// salida arriba, al fondo → curva amplia hacia la derecha → looping de 1¼ vueltas bajando
+// → curva suave que entra por la boca de la caja → la punta da la vuelta dentro, bajo el
+// fondo oscuro → sale por la boca → looping de la izquierda subiendo → vuelta a la salida.
+// La mitad izquierda es el reflejo de la derecha recorrido al revés.
+function buildPathPoints() {
+  const { yTop, yLow, legX, zFront, loop, heightCurve, flatLen, startArc } = TRACK;
+  const half = []; // [x, z] de la mitad derecha, del centro de la salida a la punta
+  const arc = (cx, cz, r, a0, a1, n) => {
+    for (let i = 1; i <= n; i++) {
+      const a = lerp(a0, a1, i / n);
+      half.push([cx + r * Math.cos(a), cz + r * Math.sin(a)]);
+    }
+  };
+
+  // Salida: tramo casi recto y luego una curva amplia que baja hacia el looping
+  // (la curva es tangente al looping por su lado derecho)
+  const bigR = loop.cx + loop.r - 0.35;
+  const zTop = loop.cz - bigR;
+  half.push([0, zTop], [0.35, zTop]);
+  arc(0.35, loop.cz, bigR, -Math.PI / 2, 0, 28);
+  // Looping: 1¼ vueltas alrededor de su centro, acabando por delante del looping
+  arc(loop.cx, loop.cz, loop.r, 0, Math.PI * 2 * loop.turns, 80);
+  // Curva en sentido contrario que deja la pista entrando recta por la boca de la caja
+  const exitR = loop.cx - legX;
+  const ez = loop.cz + loop.r + exitR;
+  arc(loop.cx, ez, exitR, -Math.PI / 2, -Math.PI, 22);
+  half.push([legX, -0.55], [legX, -0.1], [legX * 0.62, zFront - 0.12]);
+
+  // Altura según la distancia desde el centro de la salida: llano en la salida, pendiente
+  // constante por el looping (cada vuelta baja lo bastante para pasar por debajo) y algo
+  // más de pendiente al final para llegar por encima del borde de la caja.
+  const d = [0];
+  for (let i = 1; i < half.length; i++) {
+    d.push(d[i - 1] + Math.hypot(half[i][0] - half[i - 1][0], half[i][1] - half[i - 1][1]));
+  }
+  const tipD = d[d.length - 1] + Math.hypot(half[half.length - 1][0], half[half.length - 1][1] - zFront);
+  const rimD = tipD - 1.5;     // donde pasa por encima de la pared de atrás
+  const yRim = BOX.height + 0.2;
+  const heightAt = (i) => {
+    const di = d[i];
+    if (di < rimD) {
+      const k = clamp((di - flatLen) / (rimD - flatLen), 0, 1);
+      return lerp(yTop, yRim, lerp(k, smoothstep(0, 1, k), heightCurve));
+    }
+    return lerp(yRim, yLow, smoothstep(0, 1, (di - rimD) / (tipD - rimD)) * 0.5 + (di - rimD) / (tipD - rimD) * 0.5);
+  };
+  const right = half.map(([x, z], i) => new V3(x, heightAt(i), z));
+  const left = right.slice(1).reverse().map((p) => new V3(-p.x, p.y, p.z));
+  const pts = right.concat([new V3(0, yLow, zFront)], left);
+
+  // El circuito empieza un poco antes del centro de la salida (lado izquierdo)
+  let j = pts.length - 1;
+  let acc = 0;
+  while (j > 0 && acc < startArc) {
+    acc += pts[j].distanceTo(pts[(j + 1) % pts.length]);
+    j--;
+  }
+  return pts.slice(j).concat(pts.slice(0, j));
+}
+
+const curve = new THREE.CatmullRomCurve3(buildPathPoints(), true, 'centripetal');
+curve.arcLengthDivisions = 3000;
+const TRACK_LEN = curve.getLength();
+const N = TRACK.samples;
+
+// Marcos (posición, tangente, normal y lateral) con peralte en las curvas
+const frames = (() => {
+  const up = new V3(0, 1, 0);
+  const list = [];
+  for (let i = 0; i <= N; i++) {
+    const u = i / N;
+    const p = curve.getPointAt(u);
+    const t = curve.getTangentAt(u).normalize();
+    list.push({ p, t, n: new V3(), x: new V3(), s: u * TRACK_LEN, bank: 0 });
+  }
+
+  const ds = TRACK_LEN / N;
+  const k = new V3();
+  const target = new V3();
+  const toCam = new V3();
+  for (let i = 0; i <= N; i++) {
+    const f = list[i];
+    // La pista se inclina hacia la cámara para que se vea de cara: mucho al fondo, donde
+    // si no se vería casi de canto, y poco cerca de la caja.
+    toCam.subVectors(CAM_BASE, f.p).normalize();
+    const face = lerp(0.2, 0.8, smoothstep(-1.5, -5.5, f.p.z));
+    target.copy(up).addScaledVector(toCam, face);
+    f.n.copy(target).addScaledVector(f.t, -f.t.dot(target)).normalize();
+    f.x.crossVectors(f.n, f.t).normalize();
+    // El circuito es cerrado: los vecinos dan la vuelta (el marco N es el mismo que el 0)
+    const a = list[(i - 1 + N) % N].t;
+    const b = list[(i + 1) % N].t;
+    k.subVectors(b, a).divideScalar(2 * ds);
+    // Peralte suave en las curvas, y menos abajo, donde se vería la panza de la pista
+    const maxBank = lerp(0.08, 0.22, smoothstep(2.0, 3.4, f.p.y));
+    f.bank = clamp(k.dot(f.x) * 0.4, -maxBank, maxBank);
+  }
+
+  // Suaviza el peralte para que no haya saltos
+  for (let pass = 0; pass < 3; pass++) {
+    const copy = list.map((f) => f.bank);
+    for (let i = 0; i <= N; i++) {
+      let sum = 0;
+      let count = 0;
+      for (let j = -16; j <= 16; j++) {
+        const q = copy[(((i + j) % N) + N) % N];
+        sum += q;
+        count++;
+      }
+      list[i].bank = sum / count;
+    }
+  }
+
+  for (const f of list) {
+    const c = Math.cos(f.bank);
+    const s = Math.sin(f.bank);
+    const n = f.n.clone().multiplyScalar(c).addScaledVector(f.x, s).normalize();
+    f.n.copy(n);
+    f.x.crossVectors(f.n, f.t).normalize();
+  }
+  return list;
+})();
+
+const tmpFrame = { p: new V3(), t: new V3(), n: new V3(), x: new V3() };
+
+function frameAt(s, out = tmpFrame) {
+  const w = ((s % TRACK_LEN) + TRACK_LEN) % TRACK_LEN; // circuito cerrado
+  const u = (w / TRACK_LEN) * N;
+  const i = Math.min(Math.floor(u), N - 1);
+  const a = u - i;
+  const A = frames[i];
+  const B = frames[i + 1];
+  out.p.lerpVectors(A.p, B.p, a);
+  out.t.lerpVectors(A.t, B.t, a).normalize();
+  out.n.lerpVectors(A.n, B.n, a).normalize();
+  out.x.crossVectors(out.n, out.t).normalize();
+  out.n.crossVectors(out.t, out.x).normalize();
+  return out;
+}
+
+const basis = new THREE.Matrix4();
+
+// yaw = giro sobre la normal de la pista (Math.PI = el coche mira cuesta arriba)
+function placeOnTrack(obj, s, lateral = 0, lift = 0, yaw = 0) {
+  const f = frameAt(s);
+  obj.position.copy(f.p).addScaledVector(f.x, lateral).addScaledVector(f.n, lift);
+  basis.makeBasis(f.x, f.n, f.t);
+  obj.quaternion.setFromRotationMatrix(basis);
+  if (yaw) obj.rotateY(yaw);
+  return f;
+}
+
+// ¿Está este punto escondido dentro de la caja (por debajo del borde)?
+function insideBox(p) {
+  return Math.abs(p.x) < BOX.half && Math.abs(p.z) < BOX.half && p.y < BOX.voidY + 0.1;
+}
+
+// Luz que llega a un punto: 1 fuera de la caja; dentro se va fundiendo a negro
+// desde el borde hasta el fondo oscuro (voidY)
+function boxFade(x, y, z) {
+  const edge = Math.max(Math.abs(x), Math.abs(z));
+  const inside = 1 - smoothstep(BOX.half - 0.15, BOX.half + 0.15, edge);
+  const lit = Math.pow(smoothstep(BOX.voidY, BOX.height + 0.08, y), 1.6);
+  return lerp(1, lit, inside);
+}
+
+// Tramo del circuito que va por dentro de la caja: de S_IN (se meten) a S_OUT (asoman)
+const [S_IN, S_OUT] = (() => {
+  let i = 0;
+  while (i < N && (frames[i].s < START_S || !insideBox(frames[i].p))) i++;
+  let j = i;
+  while (j < N && insideBox(frames[j].p)) j++;
+  return [frames[i].s, frames[j].s];
+})();
+
+// Barre un perfil 2D (x lateral, y normal) a lo largo del circuito
+function sweepGeometry(profile, { closed = false, uFromX = false, vScale = 1 } = {}) {
+  const pos = [];
+  const nor = [];
+  const uv = [];
+  const col = [];
+  const idx = [];
+  const edges = closed ? profile.length : profile.length - 1;
+
+  for (let e = 0; e < edges; e++) {
+    const a = profile[e];
+    const b = profile[(e + 1) % profile.length];
+    let nx = b[1] - a[1];
+    let ny = -(b[0] - a[0]);
+    const nl = Math.hypot(nx, ny);
+    nx /= nl;
+    ny /= nl;
+    const base = pos.length / 3;
+
+    for (let i = 0; i <= N; i++) {
+      const f = frames[i];
+      for (let k = 0; k < 2; k++) {
+        const p = k ? b : a;
+        const vx = f.p.x + f.x.x * p[0] + f.n.x * p[1];
+        const vy = f.p.y + f.x.y * p[0] + f.n.y * p[1];
+        const vz = f.p.z + f.x.z * p[0] + f.n.z * p[1];
+        pos.push(vx, vy, vz);
+        const light = boxFade(vx, vy, vz); // fundido a negro dentro de la caja
+        col.push(light, light, light);
+        nor.push(
+          f.x.x * nx + f.n.x * ny,
+          f.x.y * nx + f.n.y * ny,
+          f.x.z * nx + f.n.z * ny
+        );
+        uv.push(uFromX ? (p[0] + TRACK.width / 2) / TRACK.width : k, f.s * vScale);
+      }
+      if (i < N) {
+        const j = base + i * 2;
+        idx.push(j, j + 1, j + 2, j + 1, j + 3, j + 2);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setIndex(idx);
+  return geo;
+}
+
+/* ---------- Circuito ---------- */
+
+const trackGroup = new THREE.Group();
+scene.add(trackGroup);
+
+(function buildTrack() {
+  const W = TRACK.width / 2;
+  const H = TRACK.thickness;
+  const K = TRACK.kerb;
+  const KH = TRACK.kerbHeight;
+
+  const road = new THREE.Mesh(
+    sweepGeometry([[W, 0], [-W, 0]], { uFromX: true, vScale: 1.1 }),
+    new THREE.MeshStandardMaterial({ map: roadTexture, roughness: 0.85, vertexColors: true })
+  );
+
+  const body = new THREE.Mesh(
+    sweepGeometry([[-W, 0], [-W, -H], [W, -H], [W, 0]]),
+    new THREE.MeshStandardMaterial({ color: COLORS.plastic, roughness: 0.7, vertexColors: true })
+  );
+
+  const kerbMat = new THREE.MeshStandardMaterial({ map: kerbTexture, roughness: 0.6, vertexColors: true });
+  const kerbL = new THREE.Mesh(
+    sweepGeometry([[-W - K, -H], [-W, -H], [-W, KH], [-W - K, KH]], { closed: true, vScale: 2.6 }),
+    kerbMat
+  );
+  const kerbR = new THREE.Mesh(
+    sweepGeometry([[W, -H], [W + K, -H], [W + K, KH], [W, KH]], { closed: true, vScale: 2.6 }),
+    kerbMat
+  );
+
+  for (const m of [road, body, kerbL, kerbR]) {
+    m.castShadow = true;
+    m.receiveShadow = true;
+    trackGroup.add(m);
+  }
+
+  // Línea de salida
+  const line = new THREE.Mesh(
+    new THREE.PlaneGeometry(TRACK.width, 0.16),
+    new THREE.MeshStandardMaterial({ map: checkerTexture, roughness: 0.8 })
+  );
+  checkerTexture.repeat.set(1, 1);
+  placeOnTrack(line, START_S, 0, 0.003);
+  line.rotateX(-Math.PI / 2);
+  line.receiveShadow = true;
+  trackGroup.add(line);
+})();
+
+/* ---------- Pórtico de salida con semáforo ---------- */
+
+const gantryLights = [];
+
+(function buildGantry() {
+  // El pórtico va vertical aunque la pista esté inclinada hacia la cámara, así que cada
+  // poste baja hasta donde está la pista a su lado (el lado de la cámara queda más bajo)
+  const f = frameAt(START_S);
+  const up = new V3(0, 1, 0);
+  const fwd = new V3(f.t.x, 0, f.t.z).normalize();
+  const side = new V3().crossVectors(up, fwd).normalize();
+  const surfaceY = (xl) => (f.x.y / f.x.dot(side)) * xl; // altura de la pista a esa distancia lateral
+
+  const g = new THREE.Group();
+  const frameMat = new THREE.MeshStandardMaterial({ color: "#f7efe0", roughness: 0.5 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: "#111522", roughness: 0.6 });
+  const span = TRACK.width / 2 + TRACK.kerb / 2; // los postes se apoyan en los bordillos
+  const top = 0.72;
+  for (const sx of [-1, 1]) {
+    const base = surfaceY(sx * span) + TRACK.kerbHeight;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.05, top - base, 0.05), frameMat);
+    post.position.set(sx * span, (top + base) / 2, 0);
+    post.castShadow = true;
+    g.add(post);
+  }
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(span * 2 + 0.05, 0.16, 0.08), frameMat);
+  bar.position.set(0, top, 0);
+  bar.castShadow = true;
+  g.add(bar);
+
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.14, 0.04), darkMat);
+  panel.position.set(0, top, -0.05);
+  g.add(panel);
+
+  // Semáforo vertical pegado al poste del lado de la cámara (lado -x del pórtico)
+  const towerX = -span - 0.055;
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.44, 0.14), darkMat);
+  tower.position.set(towerX, top - 0.22, 0);
+  g.add(tower);
+
+  for (let i = 0; i < 3; i++) {
+    const mat = new THREE.MeshStandardMaterial({ color: "#2a2f4d", emissive: "#000000", roughness: 0.3 });
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.04, 14, 10), mat);
+    bulb.position.set(towerX - 0.02, top - 0.08 - i * 0.13, 0);
+    g.add(bulb);
+    gantryLights.push(mat);
+  }
+
+  g.position.copy(f.p);
+  g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, up, fwd));
+  trackGroup.add(g);
+})();
+
+/* ---------- Luces de Navidad a lo largo de la pista ----------
+   Una guirnalda por cada bordillo: bombillas de colores con halo, unidas por un cable
+   que cae un poco entre bombilla y bombilla. Titilan cada una a su ritmo y se apagan
+   al hundirse en la caja (el mismo fundido que la pista).                            */
+
+const xmas = (() => {
+  const PALETTE = ['#ffc93c', '#e8233f', '#3ee07a', '#f7efe0', '#1fa8ff', '#ff7ab6'];
+  const SPACING = 0.34;
+  const offset = TRACK.width / 2 + TRACK.kerb * 0.5;
+  const count = Math.floor(TRACK_LEN / SPACING);
+  const bulbs = [];
+  const wire = [];
+  const wireColor = new THREE.Color('#2f5a3c');
+
+  for (const side of [-1, 1]) {
+    let prev = null;
+    for (let i = 0; i < count; i++) {
+      const s = (i + (side > 0 ? 0.5 : 0)) * SPACING;
+      const f = frameAt(s);
+      const p = f.p.clone().addScaledVector(f.x, side * offset).addScaledVector(f.n, TRACK.kerbHeight + 0.04);
+      const sag = f.n.clone().multiplyScalar(-0.035); // cuánto cae el cable entre bombillas
+      const fade = boxFade(p.x, p.y, p.z);
+      if (fade < 0.04) {
+        prev = null; // dentro de la caja no hay guirnalda
+        continue;
+      }
+      if (prev) {
+        const mid = prev.p.clone().lerp(p, 0.5).add(sag);
+        wire.push([prev.p, mid, prev.fade, (prev.fade + fade) / 2], [mid, p, (prev.fade + fade) / 2, fade]);
+      }
+      prev = { p, fade };
+      // Charco de luz sobre la pista, algo hacia dentro del bordillo
+      const pool = f.p.clone().addScaledVector(f.x, side * (offset - 0.1)).addScaledVector(f.n, 0.012);
+      bulbs.push({
+        p,
+        pool,
+        basis: new THREE.Matrix4().makeBasis(f.x.clone(), f.n.clone(), f.t.clone()),
+        fade,
+        base: new THREE.Color(PALETTE[(i + (side > 0 ? 3 : 0)) % PALETTE.length]),
+        phase: rand(0, Math.PI * 2),
+        speed: rand(1.4, 3.2),
+        index: i,
+      });
+    }
+  }
+
+  // Cable
+  const wirePos = [];
+  const wireCol = [];
+  for (const [a, b, fa, fb] of wire) {
+    wirePos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    wireCol.push(wireColor.r * fa, wireColor.g * fa, wireColor.b * fa, wireColor.r * fb, wireColor.g * fb, wireColor.b * fb);
+  }
+  const wireGeo = new THREE.BufferGeometry();
+  wireGeo.setAttribute('position', new THREE.Float32BufferAttribute(wirePos, 3));
+  wireGeo.setAttribute('color', new THREE.Float32BufferAttribute(wireCol, 3));
+  trackGroup.add(new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({ vertexColors: true })));
+
+  // Bombillas (sin sombreado: brillan por sí mismas)
+  const bulbMesh = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.04, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+    bulbs.length
+  );
+  const m = new THREE.Matrix4();
+  bulbs.forEach((b, i) => {
+    m.makeTranslation(b.p.x, b.p.y, b.p.z);
+    bulbMesh.setMatrixAt(i, m);
+    bulbMesh.setColorAt(i, b.base);
+  });
+  trackGroup.add(bulbMesh);
+
+  // Halo de cada bombilla
+  const haloTexture = canvasTexture(64, 64, (g, w, h) => {
+    const grad = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, h);
+  });
+  const haloGeo = new THREE.BufferGeometry();
+  haloGeo.setAttribute('position', new THREE.Float32BufferAttribute(bulbs.flatMap((b) => [b.p.x, b.p.y, b.p.z]), 3));
+  haloGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(bulbs.length * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  const halos = new THREE.Points(
+    haloGeo,
+    new THREE.PointsMaterial({
+      size: 0.58,
+      map: haloTexture,
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  trackGroup.add(halos);
+
+  // Luz que dan las bombillas: un charco de color sobre el asfalto y el bordillo, que
+  // titila con su bombilla (mezcla aditiva, así ilumina lo que tiene debajo)
+  const poolGeo = new THREE.PlaneGeometry(0.5, 0.5);
+  poolGeo.rotateX(-Math.PI / 2); // tumbado: su normal es la de la pista
+  const pools = new THREE.InstancedMesh(
+    poolGeo,
+    new THREE.MeshBasicMaterial({
+      map: haloTexture,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+    bulbs.length
+  );
+  bulbs.forEach((b, i) => {
+    m.copy(b.basis).setPosition(b.pool);
+    pools.setMatrixAt(i, m);
+    pools.setColorAt(i, b.base);
+  });
+  pools.renderOrder = 1;
+  trackGroup.add(pools);
+
+  return { bulbs, bulbMesh, halos, pools };
+})();
+
+const bulbColor = new THREE.Color();
+const WHITE = new THREE.Color(1, 1, 1);
+
+// Cada bombilla titila a su ritmo; encima pasa una ola lenta que recorre la guirnalda
+function updateXmasLights(time) {
+  const haloColors = xmas.halos.geometry.attributes.color;
+  xmas.bulbs.forEach((b, i) => {
+    const twinkle = 0.5 + 0.5 * Math.sin(time * b.speed + b.phase);
+    const chase = REDUCED_MOTION ? 0.5 : 0.5 + 0.5 * Math.sin(time * 3 - b.index * 0.45);
+    const glow = (0.55 + 0.4 * twinkle + 0.3 * chase) * b.fade;
+    // El centro de la bombilla se acerca al blanco cuanto más brilla
+    bulbColor.copy(b.base).multiplyScalar(0.9 + 0.7 * glow).lerp(WHITE, 0.25 * glow * b.fade);
+    xmas.bulbMesh.setColorAt(i, bulbColor);
+    haloColors.setXYZ(i, b.base.r * glow * 1.15, b.base.g * glow * 1.15, b.base.b * glow * 1.15);
+    bulbColor.copy(b.base).multiplyScalar(glow * 0.42);
+    xmas.pools.setColorAt(i, bulbColor);
+  });
+  xmas.bulbMesh.instanceColor.needsUpdate = true;
+  xmas.pools.instanceColor.needsUpdate = true;
+  haloColors.needsUpdate = true;
+}
+
+/* ---------- Vallas publicitarias junto a la pista ----------
+   Como en un circuito de verdad: dos vallas de pie en el borde de fuera de la salida,
+   siguiendo la curva de la pista y mirando hacia ella (y hacia la cámara). Los logos
+   vienen de logos-data.js (data URI) para poder usarlos en WebGL también al abrir el
+   cartel como archivo local.                                                          */
+
+// Textura de la valla: marco dorado, fondo de color y logo (con el nombre al lado si se da)
+function boardTexture({ logo, crop, caption, background, aspect }) {
+  const W = 1024;
+  const H = Math.round(W / aspect);
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const g = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  const border = Math.round(H * 0.08);
+  const paint = (img) => {
+    g.fillStyle = COLORS.gold;
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = background;
+    g.fillRect(border, border, W - border * 2, H - border * 2);
+    if (img) {
+      const [sx, sy, sw, sh] = crop || [0, 0, img.naturalWidth, img.naturalHeight];
+      const pad = H * 0.1;
+      const lines = caption || [];
+      const fontSize = Math.round(H * 0.3);
+      g.font = `800 ${fontSize}px Archivo, "Helvetica Neue", Arial, sans-serif`;
+      const textW = lines.length ? Math.max(...lines.map((l) => g.measureText(l).width)) : 0;
+      const gap = lines.length ? H * 0.12 : 0;
+      const k = Math.min((W - (border + pad) * 2 - textW - gap) / sw, (H - (border + pad) * 2) / sh);
+      const dw = sw * k;
+      const dh = sh * k;
+      const x0 = (W - (dw + gap + textW)) / 2;
+      g.drawImage(img, sx, sy, sw, sh, x0, (H - dh) / 2, dw, dh);
+      g.fillStyle = COLORS.ink;
+      g.textBaseline = 'middle';
+      lines.forEach((l, i) => {
+        g.fillText(l, x0 + dw + gap, H / 2 + (i - (lines.length - 1) / 2) * fontSize * 1.02);
+      });
+    }
+    texture.needsUpdate = true;
+  };
+  paint(null);
+
+  // Se pinta cuando están listos el logo y la tipografía del cartel
+  const img = new Image();
+  const imgReady = new Promise((resolve) => img.addEventListener('load', resolve));
+  img.src = logo;
+  const fontReady = document.fonts ? document.fonts.load('800 50px Archivo').catch(() => null) : null;
+  Promise.all([imgReady, fontReady]).then(() => paint(img));
+  return texture;
+}
+
+// Valla de s0 a s1, de pie (vertical) sobre el borde exterior de la pista
+function makeTrackBoard({ s0, s1, height = 0.3, ...art }) {
+  const SAMPLES = 24;
+  const out = TRACK.width / 2 + TRACK.kerb + 0.05; // justo por fuera del bordillo y de las luces
+  const bottoms = [];
+  for (let i = 0; i <= SAMPLES; i++) {
+    const f = frameAt(lerp(s0, s1, i / SAMPLES));
+    bottoms.push(f.p.clone().addScaledVector(f.x, out).add(new V3(0, TRACK.kerbHeight * 0.5, 0)));
+  }
+  let length = 0;
+  for (let i = 1; i <= SAMPLES; i++) length += bottoms[i].distanceTo(bottoms[i - 1]);
+
+  // Panel: una tira vertical que sigue la curva (u a lo largo, v de abajo arriba)
+  const pos = [];
+  const uv = [];
+  const idx = [];
+  bottoms.forEach((b, i) => {
+    pos.push(b.x, b.y, b.z, b.x, b.y + height, b.z);
+    uv.push(i / SAMPLES, 0, i / SAMPLES, 1);
+    if (i < SAMPLES) {
+      const j = i * 2;
+      idx.push(j, j + 2, j + 1, j + 1, j + 2, j + 3);
+    }
+  });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+
+  const board = new THREE.Mesh(
+    geo,
+    new THREE.MeshStandardMaterial({
+      map: boardTexture({ ...art, aspect: length / height }),
+      roughness: 0.55,
+      side: THREE.DoubleSide,
+    })
+  );
+  board.castShadow = true;
+  trackGroup.add(board);
+
+  // Patas: dos postes oscuros que la sujetan por detrás
+  const legMat = new THREE.MeshStandardMaterial({ color: '#1a1d2b', roughness: 0.6 });
+  for (const t of [0.12, 0.88]) {
+    const b = bottoms[Math.round(t * SAMPLES)];
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.03, height + 0.06, 0.03), legMat);
+    leg.position.set(b.x, b.y + (height - 0.06) / 2, b.z);
+    const f = frameAt(lerp(s0, s1, t));
+    leg.position.addScaledVector(new V3(f.x.x, 0, f.x.z).normalize(), 0.025);
+    trackGroup.add(leg);
+  }
+  return board;
+}
+
+const centreS = TRACK.startArc; // centro de la salida (el pórtico está en START_S)
+makeTrackBoard({
+  logo: window.LOGOS.planetafp,
+  crop: [14, 56, 272, 58], // el archivo tiene mucho margen alrededor del texto
+  background: COLORS.ink,
+  s0: centreS - 1.85,
+  s1: centreS - 0.4,
+});
+makeTrackBoard({
+  logo: window.LOGOS.itaca,
+  caption: ['Fundación', 'ITACA'], // una línea por elemento
+  background: COLORS.red,
+  s0: centreS + 0.4,
+  s1: centreS + 1.85,
+});
+
+/* ---------- Caja de regalo ---------- */
+
+const boxGroup = new THREE.Group();
+scene.add(boxGroup);
+
+const redMat = new THREE.MeshStandardMaterial({ color: COLORS.red, roughness: 0.5 });
+const innerMat = new THREE.MeshStandardMaterial({ color: COLORS.redInner, roughness: 0.95 });
+
+// Cara interior de las paredes: granate oscuro arriba que se funde a negro hacia el fondo
+const innerWallTexture = canvasTexture(4, 128, (g, w, h) => {
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, COLORS.redInner);
+  grad.addColorStop(1 - BOX.voidY / BOX.height, '#0a0204');
+  grad.addColorStop(1, COLORS.boxVoid);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, w, h);
+});
+innerWallTexture.wrapT = THREE.ClampToEdgeWrapping;
+const innerWallMat = new THREE.MeshStandardMaterial({ map: innerWallTexture, roughness: 1 });
+const goldMat = new THREE.MeshStandardMaterial({ color: COLORS.gold, roughness: 0.32, metalness: 0.35 });
+
+(function buildBox() {
+  const { half, height, wall } = BOX;
+
+  // Caras de BoxGeometry: +x, -x, +y, -y, +z, -z. La cara interior va en granate oscuro.
+  function wallMesh(w, h, d, x, z, innerFace, y0 = 0) {
+    const mats = [redMat, redMat, redMat, redMat, redMat, redMat];
+    mats[innerFace] = innerWallMat;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
+    m.position.set(x, y0 + h / 2, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    boxGroup.add(m);
+  }
+
+  wallMesh(half * 2, height, wall, 0, half - wall / 2, 5);    // delante
+  wallMesh(half * 2, height, wall, 0, -half + wall / 2, 4);   // detrás
+  wallMesh(wall, height, half * 2 - wall * 2, -half + wall / 2, 0, 0); // izquierda
+  wallMesh(wall, height, half * 2 - wall * 2, half - wall / 2, 0, 1);  // derecha
+
+  // El fondo va por dentro de las paredes: si fuera igual de ancho que la caja, sus caras
+  // laterales coincidirían con las de las paredes y parpadearían (z-fighting)
+  const inner = half * 2 - wall * 2;
+  const bottom = new THREE.Mesh(new THREE.BoxGeometry(inner, wall, inner), innerMat);
+  bottom.position.y = wall / 2 + 0.002;
+  bottom.receiveShadow = true;
+  boxGroup.add(bottom);
+
+  // Fondo oscuro justo por debajo del borde: la pista se hunde en él y no se ve
+  // lo que pasa dentro de la caja
+  const voidPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(inner, inner),
+    new THREE.MeshBasicMaterial({ color: COLORS.boxVoid })
+  );
+  voidPlane.rotation.x = -Math.PI / 2;
+  voidPlane.position.y = BOX.voidY;
+  boxGroup.add(voidPlane);
+
+  // Cinta dorada en el centro de cada lado
+  const rw = 0.34;
+  const off = half + 0.012;
+  for (const [x, z, rot] of [[0, off, 0], [0, -off, 0], [off, 0, Math.PI / 2], [-off, 0, Math.PI / 2]]) {
+    const ribbon = new THREE.Mesh(new THREE.BoxGeometry(rw, height, 0.02), goldMat);
+    ribbon.position.set(x, height / 2, z);
+    ribbon.rotation.y = rot;
+    ribbon.castShadow = true;
+    boxGroup.add(ribbon);
+  }
+})();
+
+// Tapa apoyada en el lado derecho de la caja, con el lazo hacia el espectador
+const lidGroup = new THREE.Group();
+const lidPivot = new THREE.Group();
+scene.add(lidPivot);
+lidPivot.add(lidGroup);
+
+(function buildLid() {
+  const s = BOX.half * 2 + 0.16;
+  const h = 0.4;
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(s, h, s), [redMat, redMat, redMat, innerMat, redMat, redMat]);
+  lid.castShadow = true;
+  lid.receiveShadow = true;
+  lidGroup.add(lid);
+
+  const r1 = new THREE.Mesh(new THREE.BoxGeometry(0.36, h + 0.03, s + 0.03), goldMat);
+  const r2 = new THREE.Mesh(new THREE.BoxGeometry(s + 0.03, h + 0.03, 0.36), goldMat);
+  r1.castShadow = r2.castShadow = true;
+  lidGroup.add(r1, r2);
+
+  // Lazo: dos lazadas, nudo y dos colas
+  const bow = new THREE.Group();
+  bow.position.y = h / 2 + 0.02;
+  const loopGeo = new THREE.TorusGeometry(0.36, 0.1, 14, 32);
+  for (const side of [-1, 1]) {
+    const loop = new THREE.Mesh(loopGeo, goldMat);
+    loop.scale.set(1, 0.8, 1);
+    loop.rotation.set(0, side * 0.5, side * 0.25);
+    loop.position.set(side * 0.33, 0.22, 0);
+    loop.castShadow = true;
+    bow.add(loop);
+
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.025, 0.75), goldMat);
+    tail.position.set(side * 0.22, 0.02, 0.36);
+    tail.rotation.y = side * 0.45;
+    tail.castShadow = true;
+    bow.add(tail);
+  }
+  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.15, 18, 12), goldMat);
+  knot.scale.set(1, 0.85, 1);
+  knot.position.y = 0.14;
+  bow.add(knot);
+  lidGroup.add(bow);
+})();
+
+// Pivote en el borde inferior de la tapa, que descansa en el suelo
+lidGroup.position.set(0, 0, -(BOX.half + 0.08));
+lidPivot.position.set(-(BOX.half + 0.55), 0.2, -1.35);
+lidPivot.rotation.set(0, 0.75, 0);
+lidGroup.rotation.set(1.28, 0, 0);
+const LID_BASE = { x: lidPivot.position.x, y: lidPivot.position.y, tilt: lidGroup.rotation.x };
+
+/* ---------- Coches ---------- */
+
+function makeCar(spec) {
+  const car = new THREE.Group();
+  const paint = new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.28, metalness: 0.2 });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: spec.stripe, roughness: 0.35 });
+  const dark = new THREE.MeshStandardMaterial({ color: '#141722', roughness: 0.3, metalness: 0.4 });
+  const tyre = new THREE.MeshStandardMaterial({ color: '#121216', roughness: 0.85 });
+  const rim = new THREE.MeshStandardMaterial({ color: '#d4d8e2', roughness: 0.3, metalness: 0.3 });
+  const helmet = new THREE.MeshStandardMaterial({ color: '#f7efe0', roughness: 0.25 });
+
+  const add = (geo, mat, x, y, z, parent = car) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    parent.add(m);
+    return m;
+  };
+
+  // Carrocería: perfil lateral (z hacia delante, y hacia arriba) extruido a lo ancho,
+  // con los cantos redondeados
+  const profile = new THREE.Shape();
+  profile.moveTo(-0.27, 0.035);
+  profile.lineTo(-0.27, 0.11);
+  profile.quadraticCurveTo(-0.2, 0.13, -0.12, 0.13);
+  profile.quadraticCurveTo(-0.06, 0.16, 0.02, 0.14); // joroba de la cabina
+  profile.quadraticCurveTo(0.16, 0.11, 0.3, 0.06); // morro que baja
+  profile.quadraticCurveTo(0.32, 0.04, 0.29, 0.035);
+  profile.lineTo(-0.27, 0.035);
+  const extrude = (width, bevel) => {
+    const geo = new THREE.ExtrudeGeometry(profile, {
+      depth: width,
+      bevelEnabled: true,
+      bevelThickness: bevel,
+      bevelSize: bevel,
+      bevelSegments: 4,
+      curveSegments: 14,
+    });
+    geo.translate(0, 0, -width / 2);
+    geo.rotateY(-Math.PI / 2); // el perfil pasa a ir a lo largo del coche
+    return geo;
+  };
+  add(extrude(0.12, 0.025), paint, 0, 0, 0);
+  // Franja central: la misma silueta y el mismo bisel, estrecha y un pelo por encima
+  add(extrude(0.02, 0.025), stripeMat, 0, 0.007, 0);
+
+  // Pontones laterales, más bajos, entre las ruedas
+  for (const sx of [-1, 1]) {
+    const pod = add(new THREE.SphereGeometry(1, 20, 12), paint, sx * 0.1, 0.07, -0.02);
+    pod.scale.set(0.04, 0.036, 0.15); // esfera estirada: pontón redondeado
+  }
+
+  // Cabina abierta: aro negro sobre la carrocería, con el casco del piloto y su visera
+  const cockpit = add(new THREE.TorusGeometry(0.06, 0.012, 8, 24), dark, 0, 0.178, -0.05);
+  cockpit.rotation.x = Math.PI / 2;
+  cockpit.scale.set(1, 1.35, 1);
+  add(new THREE.SphereGeometry(0.045, 18, 12), helmet, 0, 0.205, -0.06);
+  const visor = add(new THREE.SphereGeometry(0.046, 18, 8, Math.PI * 0.2, Math.PI * 0.6, Math.PI * 0.32, Math.PI * 0.2), dark, 0, 0.205, -0.06);
+  visor.rotation.y = 0;
+
+  // Alerón delantero con sus derivas, por delante del morro
+  add(new THREE.BoxGeometry(0.32, 0.016, 0.07), stripeMat, 0, 0.03, 0.33);
+  for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.014, 0.045, 0.085), paint, sx * 0.16, 0.042, 0.33);
+
+  // Alerón trasero sobre dos soportes
+  add(new THREE.BoxGeometry(0.31, 0.018, 0.08), paint, 0, 0.205, -0.235);
+  for (const sx of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.014, 0.08, 0.025), dark, sx * 0.07, 0.16, -0.235);
+    add(new THREE.BoxGeometry(0.012, 0.06, 0.1), stripeMat, sx * 0.155, 0.2, -0.235);
+  }
+
+  // Faros redondos delante y pilotos detrás
+  const head = new THREE.MeshStandardMaterial({ color: '#fff7d6', emissive: '#fff1b0', emissiveIntensity: 0.9 });
+  const tail = new THREE.MeshStandardMaterial({ color: '#ff3b3b', emissive: '#ff1a1a', emissiveIntensity: 0.6 });
+  const lampGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.01, 14);
+  lampGeo.rotateX(Math.PI / 2);
+  for (const sx of [-1, 1]) {
+    add(lampGeo, head, sx * 0.07, 0.07, 0.285);
+    add(new THREE.BoxGeometry(0.05, 0.022, 0.01), tail, sx * 0.075, 0.09, -0.3);
+  }
+
+  // Ruedas: neumático con llanta plateada; las de detrás, más anchas
+  const wheels = [];
+  for (const [x, z, r, w] of [[-0.135, 0.17, 0.05, 0.05], [0.135, 0.17, 0.05, 0.05], [-0.14, -0.17, 0.056, 0.064], [0.14, -0.17, 0.056, 0.064]]) {
+    const wheel = new THREE.Group();
+    wheel.position.set(x, r, z);
+    wheel.rotation.z = Math.PI / 2;
+    car.add(wheel);
+    add(new THREE.CylinderGeometry(r, r, w, 22), tyre, 0, 0, 0, wheel);
+    const hub = add(new THREE.CylinderGeometry(r * 0.55, r * 0.55, w + 0.004, 16), rim, 0, 0, 0, wheel);
+    hub.castShadow = false;
+    wheels.push(wheel);
+  }
+
+  car.scale.setScalar(1.3);
+  scene.add(car);
+
+  // Materiales con su color original, para fundirlos a negro al entrar en la caja
+  const shades = [paint, stripeMat, dark, tyre, rim, helmet, head, tail].map((m) => ({
+    m,
+    color: m.color.clone(),
+    emissive: m.emissiveIntensity,
+  }));
+
+  return {
+    ...spec,
+    group: car,
+    wheels,
+    tailMat: tail,
+    shades,
+    light: 1,
+    s: PARK_S + spec.grid,
+    v: 0,
+    vmax: CONFIG.baseSpeed,
+    freq: 1,
+    phaseOff: 0,
+    boost: false, // ratón sobre su zona lateral
+    boostMix: 0,  // 0 → 1, entra y sale suave
+    stage: 'grid', // race · inside · return · grid (ver «Ciclo de la carrera»)
+    insideTime: 0,
+    trail: makeTrail(spec.trail),
+  };
+}
+
+/* ---------- Estelas de velocidad ---------- */
+
+const TRAIL_N = 28;
+
+function makeTrail(color) {
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(TRAIL_N * 2 * 3);
+  const alphas = new Float32Array(TRAIL_N * 2);
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1).setUsage(THREE.DynamicDrawUsage));
+  const idx = [];
+  for (let i = 0; i < TRAIL_N - 1; i++) {
+    const j = i * 2;
+    idx.push(j, j + 1, j + 2, j + 1, j + 3, j + 2);
+  }
+  geo.setIndex(idx);
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) } },
+    vertexShader: `
+      attribute float alpha;
+      varying float vAlpha;
+      void main() {
+        vAlpha = alpha;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() { gl_FragColor = vec4(uColor, vAlpha); }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return { mesh, geo, history: [] };
+}
+
+function updateTrail(car, f, intensity, dir = 1) {
+  const tr = car.trail;
+  const tailPos = new V3().copy(car.group.position).addScaledVector(f.t, -0.24 * dir).addScaledVector(f.n, 0.08);
+  tr.history.unshift({ p: tailPos, x: f.x.clone() });
+  if (tr.history.length > TRAIL_N) tr.history.length = TRAIL_N;
+
+  const pos = tr.geo.attributes.position.array;
+  const alpha = tr.geo.attributes.alpha.array;
+  for (let i = 0; i < TRAIL_N; i++) {
+    const h = tr.history[Math.min(i, tr.history.length - 1)];
+    const k = 1 - i / (TRAIL_N - 1);
+    const w = 0.1 * k + 0.01;
+    for (let side = 0; side < 2; side++) {
+      const sgn = side ? 1 : -1;
+      const o = (i * 2 + side) * 3;
+      pos[o] = h.p.x + h.x.x * w * sgn;
+      pos[o + 1] = h.p.y + h.x.y * w * sgn;
+      pos[o + 2] = h.p.z + h.x.z * w * sgn;
+      alpha[i * 2 + side] = i < tr.history.length ? k * k * intensity * 0.85 : 0;
+    }
+  }
+  tr.geo.attributes.position.needsUpdate = true;
+  tr.geo.attributes.alpha.needsUpdate = true;
+}
+
+function clearTrail(car) {
+  car.trail.history.length = 0;
+  car.trail.geo.attributes.alpha.array.fill(0);
+  car.trail.geo.attributes.alpha.needsUpdate = true;
+}
+
+const cars = CARS.map(makeCar);
+
+/* ---------- Confeti al entrar en la caja ---------- */
+
+const CONFETTI_COUNT = 260;
+const confettiMesh = new THREE.InstancedMesh(
+  new THREE.PlaneGeometry(0.07, 0.13),
+  new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.5 }),
+  CONFETTI_COUNT
+);
+confettiMesh.frustumCulled = false;
+scene.add(confettiMesh);
+
+const confetti = [];
+const dummy = new THREE.Object3D();
+const tmpColor = new THREE.Color();
+
+for (let i = 0; i < CONFETTI_COUNT; i++) {
+  confetti.push({ p: new V3(), v: new V3(), r: new THREE.Euler(), w: new V3(), life: 0 });
+  confettiMesh.setColorAt(i, tmpColor.set(CONFETTI_COLORS[i % CONFETTI_COLORS.length]));
+  dummy.scale.setScalar(0);
+  dummy.updateMatrix();
+  confettiMesh.setMatrixAt(i, dummy.matrix);
+}
+confettiMesh.instanceColor.needsUpdate = true;
+
+let confettiCursor = 0;
+
+function burstConfetti(amount) {
+  if (REDUCED_MOTION) amount = Math.round(amount * 0.2);
+  for (let n = 0; n < amount; n++) {
+    const c = confetti[confettiCursor];
+    confettiCursor = (confettiCursor + 1) % CONFETTI_COUNT;
+    c.p.set(rand(-0.9, 0.9), BOX.height + rand(-0.1, 0.2), rand(-0.9, 0.9));
+    const a = rand(0, Math.PI * 2);
+    const spread = rand(0.6, 2.6);
+    c.v.set(Math.cos(a) * spread, rand(4.5, 8.5), Math.sin(a) * spread);
+    c.r.set(rand(0, 6), rand(0, 6), rand(0, 6));
+    c.w.set(rand(-9, 9), rand(-9, 9), rand(-9, 9));
+    c.life = rand(2.4, 3.6);
+  }
+}
+
+function updateConfetti(dt) {
+  for (let i = 0; i < CONFETTI_COUNT; i++) {
+    const c = confetti[i];
+    if (c.life <= 0) continue;
+    c.life -= dt;
+    c.v.y -= 9 * dt;
+    c.v.multiplyScalar(1 - 1.6 * dt);
+    c.v.y = Math.max(c.v.y, -1.6);                        // caen planeando
+    c.p.addScaledVector(c.v, dt);
+    c.p.x += Math.sin(state.time * 4 + i) * 0.3 * dt;
+    if (c.p.y < 0.02) {
+      c.p.y = 0.02;
+      c.v.set(0, 0, 0);
+      c.w.multiplyScalar(0.9);
+    }
+    c.r.x += c.w.x * dt;
+    c.r.y += c.w.y * dt;
+    c.r.z += c.w.z * dt;
+    dummy.position.copy(c.p);
+    dummy.rotation.copy(c.r);
+    dummy.scale.setScalar(c.life > 0 ? Math.min(1, c.life * 2) : 0);
+    dummy.updateMatrix();
+    confettiMesh.setMatrixAt(i, dummy.matrix);
+  }
+  confettiMesh.instanceMatrix.needsUpdate = true;
+}
+
+/* ---------- Nieve de fondo ---------- */
+
+const SNOW_COUNT = 180;
+const snowPos = new Float32Array(SNOW_COUNT * 3);
+for (let i = 0; i < SNOW_COUNT; i++) {
+  snowPos[i * 3] = rand(-7, 7);
+  snowPos[i * 3 + 1] = rand(0, 11);
+  snowPos[i * 3 + 2] = rand(-6, 2);
+}
+const snowGeo = new THREE.BufferGeometry();
+snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3).setUsage(THREE.DynamicDrawUsage));
+const snow = new THREE.Points(
+  snowGeo,
+  new THREE.PointsMaterial({ color: 0xf7efe0, size: 0.055, transparent: true, opacity: 0.55, depthWrite: false })
+);
+scene.add(snow);
+
+function updateSnow(dt) {
+  if (REDUCED_MOTION) return; // la nieve se queda quieta
+  for (let i = 0; i < SNOW_COUNT; i++) {
+    const o = i * 3;
+    snowPos[o + 1] -= (0.25 + (i % 7) * 0.04) * dt;
+    snowPos[o] += Math.sin(state.time * 0.6 + i) * 0.08 * dt;
+    if (snowPos[o + 1] < 0) snowPos[o + 1] = 11;
+  }
+  snowGeo.attributes.position.needsUpdate = true;
+}
+
+/* ---------- Rebote de la caja y de la tapa ---------- */
+
+const springs = {
+  box: { x: 0, v: 0 },
+  lid: { x: 0, v: 0 },
+  glow: 0,
+};
+
+function kick(spring, impulse) {
+  spring.v += impulse;
+}
+
+function stepSpring(sp, dt, k = 160, c = 9) {
+  sp.v += (-k * sp.x - c * sp.v) * dt;
+  sp.x += sp.v * dt;
+}
+
+/* ---------- Pedales de turbo en 3D ----------
+   Cada lateral es una pequeña escena three.js en su propio <canvas>: una cartela con
+   ornamentos barrocos de oro que sale del borde del cartel, como parte de un marco. El
+   interior del marco es el propio pedal: aluminio cepillado del color del coche con
+   tacos de goma negra, como un pedal deportivo. Al pisarlo (mouseenter) la placa se hunde en el marco y se encoge un
+   poco, con un muelle, y se ilumina con el color del coche. */
+
+const PEDAL = {
+  pressScale: 0.06,  // al pisarlo se encoge un poco hacia el borde del cartel
+  pressDepth: 0.1,   // y se hunde en el marco (en la dirección de la mirada)
+  inset: 0.985,      // la placa llena todo el interior; su borde queda bajo la moldura
+  stiffness: 320,
+  damping: 17,
+};
+
+/* Cartela 3D que sale del borde del cartel, como parte de un marco. Su contorno está en
+   píxeles del cartel (caja de 120 × 280, con el borde del cartel en x = 0) y se pasa a
+   unidades de la escena con PX. */
+const CARTOUCHE = { w: 120, h: 280, depth: 0.1, bevel: 0.03, pitch: 0.38 };
+const PX = 0.01;
+const cartoucheXY = (x, y) => new V3(x * PX, (CARTOUCHE.h - y) * PX, 0);
+
+// Une tramos de Bézier cúbicas [p0, c1, c2, p3] (en píxeles) en un camino 3D a la altura z
+function bezierPath(segments, z) {
+  const path = new THREE.CurvePath();
+  for (const seg of segments) {
+    const [a, b, c, d] = seg.map(([x, y]) => cartoucheXY(x, y).setZ(z));
+    path.add(new THREE.CubicBezierCurve3(a, b, c, d));
+  }
+  return path;
+}
+
+const CARTOUCHE_OUTLINE = [
+  [[0, 0], [16, 8], [28, 24], [32, 46]],
+  [[32, 46], [72, 58], [106, 92], [108, 140]],
+  [[108, 140], [106, 188], [72, 222], [32, 234]],
+  [[32, 234], [28, 256], [16, 272], [0, 280]],
+];
+/* ---- Ornamentos barrocos en relieve (volutas de acanto, concha y cuentas) ---- */
+
+// Tubo que adelgaza a lo largo de la curva: tallos de volutas y hojas
+function taperedTube(curve, r0, r1, segments = 64, radial = 12) {
+  const frames = curve.computeFrenetFrames(segments, false);
+  const pos = [];
+  const nor = [];
+  const idx = [];
+  const n = new V3();
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = curve.getPointAt(t);
+    const r = lerp(r0, r1, Math.pow(t, 0.8));
+    for (let j = 0; j <= radial; j++) {
+      const a = (j / radial) * Math.PI * 2;
+      n.copy(frames.normals[i]).multiplyScalar(Math.cos(a)).addScaledVector(frames.binormals[i], Math.sin(a));
+      pos.push(p.x + n.x * r, p.y + n.y * r, p.z + n.z * r);
+      nor.push(n.x, n.y, n.z);
+    }
+  }
+  for (let i = 0; i < segments; i++) {
+    for (let j = 0; j < radial; j++) {
+      const a = i * (radial + 1) + j;
+      const b = a + radial + 1;
+      idx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setIndex(idx);
+  return geo;
+}
+
+// Espiral plana (en px del cartel) que se enrolla hacia su centro
+function spiralCurve(cx, cy, r0, startAngle, turns, dir, z) {
+  const pts = [];
+  const steps = 48;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = startAngle + dir * t * turns * Math.PI * 2;
+    const r = r0 * (1 - 0.78 * t);
+    pts.push(cartoucheXY(cx + Math.cos(a) * r, cy + Math.sin(a) * r).setZ(z));
+  }
+  return new THREE.CatmullRomCurve3(pts);
+}
+
+// Hoja de acanto: lóbulos alargados que salen en abanico desde un punto
+function acanthusLeaf(parent, mat, x, y, z, angle, length, lobes = 3, spread = 0.9) {
+  const lobeGeo = new THREE.SphereGeometry(1, 16, 10);
+  for (let i = 0; i < lobes; i++) {
+    const k = lobes === 1 ? 0 : i / (lobes - 1) - 0.5;
+    const a = angle + k * spread;
+    const len = length * (1 - Math.abs(k) * 0.45);
+    const lobe = new THREE.Mesh(lobeGeo, mat);
+    lobe.scale.set(len / 2, len * 0.17, len * 0.14);
+    const base = cartoucheXY(x, y);
+    // En px del cartel la y crece hacia abajo; en la escena, hacia arriba
+    lobe.position.set(base.x + (Math.cos(a) * len) / 2, base.y - (Math.sin(a) * len) / 2, z + len * 0.05);
+    lobe.rotation.z = -a;
+    parent.add(lobe);
+  }
+}
+
+// Voluta de acanto: un tallo grueso que se enrolla, con su botón y hojas
+function acanthusScroll(parent, mat, { x, y, r = 14, start = 0, turns = 1.15, dir = 1, leafAngle = 0, z }) {
+  const curve = spiralCurve(x, y, r, start, turns, dir, z);
+  parent.add(new THREE.Mesh(taperedTube(curve, 0.05, 0.016), mat));
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 14, 10), mat);
+  eye.position.copy(curve.getPointAt(1)).setZ(z + 0.01);
+  parent.add(eye);
+  const startPx = [x + Math.cos(start) * r, y + Math.sin(start) * r];
+  acanthusLeaf(parent, mat, startPx[0], startPx[1], z + 0.02, leafAngle, 0.32, 3, 1.0);
+}
+
+// Concha (palmeta) en la punta de la cartela
+function shellOrnament(parent, mat, x, y, z) {
+  const base = cartoucheXY(x, y);
+  const lobeGeo = new THREE.SphereGeometry(1, 18, 12);
+  const lobes = 7;
+  for (let i = 0; i < lobes; i++) {
+    const k = i / (lobes - 1) - 0.5; // −0,5 … 0,5
+    const a = k * 2.3; // abanico hacia fuera (+x)
+    const len = 0.2 * (1 - Math.abs(k) * 0.35);
+    const lobe = new THREE.Mesh(lobeGeo, mat);
+    lobe.scale.set(len / 2, 0.034, 0.05);
+    lobe.position.set(base.x + (Math.cos(a) * len) / 2, base.y + (Math.sin(a) * len) / 2, z + 0.02);
+    lobe.rotation.z = a;
+    parent.add(lobe);
+  }
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.055, 18, 12), mat);
+  knob.position.set(base.x - 0.01, base.y, z + 0.05);
+  parent.add(knob);
+  // Dos hojas que abrazan la concha por dentro
+  acanthusLeaf(parent, mat, x - 6, y - 4, z, Math.PI * 0.72, 0.22, 3, 0.7);
+  acanthusLeaf(parent, mat, x - 6, y + 4, z, -Math.PI * 0.72, 0.22, 3, 0.7);
+}
+
+function buildCartouche(parent, gold, plaqueMat) {
+  const shape = new THREE.Shape();
+  const P = (x, y) => cartoucheXY(x, y);
+  const start = P(0, 0);
+  shape.moveTo(start.x, start.y);
+  for (const [, b, c, d] of CARTOUCHE_OUTLINE) {
+    const [pb, pc, pd] = [P(...b), P(...c), P(...d)];
+    shape.bezierCurveTo(pb.x, pb.y, pc.x, pc.y, pd.x, pd.y);
+  }
+  shape.lineTo(start.x, start.y);
+
+  const plaque = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(shape, {
+      depth: CARTOUCHE.depth,
+      bevelEnabled: true,
+      bevelThickness: CARTOUCHE.bevel,
+      bevelSize: CARTOUCHE.bevel,
+      bevelSegments: 5,
+      curveSegments: 40,
+    }),
+    plaqueMat
+  );
+  // Fondo del hueco, detrás del pedal. Como la cámara mira desde arriba, lo que está más
+  // al fondo se ve más alto: se baja lo mismo para que quede escondido tras el marco
+  plaque.position.z = -0.6;
+  plaque.position.y = -0.6 * Math.tan(CARTOUCHE.pitch);
+  parent.add(plaque);
+
+  const front = CARTOUCHE.depth + CARTOUCHE.bevel;
+
+  // Moldura dorada gruesa en todo el contorno
+  parent.add(new THREE.Mesh(new THREE.TubeGeometry(bezierPath(CARTOUCHE_OUTLINE, front), 200, 0.048, 14, false), gold));
+
+
+  // Volutas de acanto: en los hombros y a media curva, arriba y abajo (reflejadas)
+  const z = front + 0.03;
+  for (const s of [1, -1]) {
+    const yy = (y) => (s > 0 ? y : CARTOUCHE.h - y);
+    acanthusScroll(parent, gold, { x: 44, y: yy(50), r: 15, start: s > 0 ? Math.PI : -Math.PI, turns: 1.1, dir: s, leafAngle: s > 0 ? -2.2 : 2.2, z });
+    acanthusScroll(parent, gold, { x: 84, y: yy(88), r: 12, start: s > 0 ? -0.4 : 0.4, turns: 1.05, dir: -s, leafAngle: s > 0 ? 2.3 : -2.3, z });
+  }
+
+  // Concha en la punta
+  shellOrnament(parent, gold, 98, 140, z);
+}
+
+// El interior del marco es el pedal: el mismo contorno (pegado al borde del cartel),
+// de aluminio cepillado del color del coche, con tacos de goma negra
+function buildFramePedal(parent, car) {
+  const k = PEDAL.inset;
+  const midY = (CARTOUCHE.h * PX) / 2;
+  const T = ([x, y]) => {
+    const p = cartoucheXY(x, y);
+    return [p.x * k, midY + (p.y - midY) * k];
+  };
+  const shape = new THREE.Shape();
+  const start = T(CARTOUCHE_OUTLINE[0][0]);
+  shape.moveTo(...start);
+  for (const [, b, c, d] of CARTOUCHE_OUTLINE) shape.bezierCurveTo(...T(b), ...T(c), ...T(d));
+  shape.lineTo(...start);
+
+  // El pivote está en el borde del cartel, a media altura: al pisarlo se encoge hacia ahí
+  const pivot = new THREE.Group();
+  pivot.position.set(0, midY, 0);
+  parent.add(pivot);
+
+  // Aluminio anodizado del color del coche, cepillado en horizontal (como los pedales
+  // deportivos de metal)
+  const plateMat = new THREE.MeshStandardMaterial({
+    color: car.color,
+    map: brushedTexture,
+    roughnessMap: brushedTexture,
+    roughness: 0.55,
+    metalness: 0.6,
+    envMapIntensity: 0.9,
+    emissive: car.color,
+    emissiveIntensity: 0,
+  });
+  const plate = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(shape, {
+      depth: 0.06,
+      bevelEnabled: true,
+      bevelThickness: 0.025,
+      bevelSize: 0.025,
+      bevelSegments: 4,
+      curveSegments: 40,
+    }),
+    plateMat
+  );
+  plate.position.y = -midY;
+  pivot.add(plate);
+
+  // Tacos de goma negra en cuadrícula, cada uno metido en su agujero con un reborde oscuro
+  const outline = shape.getPoints(240);
+  const reach = (y) => Math.max(...outline.filter((p) => Math.abs(p.y - y) < 0.04).map((p) => p.x));
+  const rubber = new THREE.MeshStandardMaterial({ color: '#17171d', roughness: 0.85, envMapIntensity: 0.3 });
+  const holeMat = new THREE.MeshStandardMaterial({ color: '#0b0b10', roughness: 0.6, metalness: 0.3 });
+  // Perfil del taco (radio, altura): base recta y la cabeza abombada
+  const studGeo = new THREE.LatheGeometry(
+    // de abajo arriba: en ese orden las caras miran hacia fuera
+    [[0.046, -0.02], [0.046, 0], [0.044, 0.016], [0.036, 0.032], [0.022, 0.04], [0, 0.042]].map(([x, y]) => new THREE.Vector2(x, y)),
+    20
+  );
+  studGeo.rotateX(Math.PI / 2); // de pie sobre la cara de la placa (+z)
+  const holeGeo = new THREE.TorusGeometry(0.052, 0.009, 8, 24);
+  const SPACING = 0.19;
+  const front = 0.085;
+  const spots = [];
+  for (let row = 0; row < 12; row++) {
+    const y = 0.5 + row * SPACING;
+    const limit = reach(y) - 0.11;
+    const offset = row % 2 ? SPACING / 2 : 0; // filas al tresbolillo
+    for (let x = 0.12 + offset; x <= limit; x += SPACING) spots.push([x, y - midY]);
+  }
+  // Todos los tacos (y todos los agujeros) en una sola malla instanciada: una llamada de
+  // dibujo en vez de un centenar
+  const studs = new THREE.InstancedMesh(studGeo, rubber, spots.length);
+  const holes = new THREE.InstancedMesh(holeGeo, holeMat, spots.length);
+  const m = new THREE.Matrix4();
+  spots.forEach(([x, y], i) => {
+    studs.setMatrixAt(i, m.makeTranslation(x, y, front));
+    holes.setMatrixAt(i, m.makeTranslation(x, y, front + 0.002));
+  });
+  pivot.add(studs, holes);
+  return { pivot, plateMat };
+}
+
+// Brocado azul noche para el fondo de la cartela: celosía de rombos con flores de cuatro
+// pétalos, todo tono sobre tono; el mismo dibujo en gris da el relieve
+const brocadeTexture = (() => {
+  const draw = (g, w, h, palette) => {
+    g.fillStyle = palette.base;
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = palette.line;
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(0, h / 2); g.lineTo(w / 2, 0); g.lineTo(w, h / 2); g.lineTo(w / 2, h); g.closePath();
+    g.stroke();
+    const flower = (cx, cy, r) => {
+      g.fillStyle = palette.flower;
+      for (let i = 0; i < 4; i++) {
+        g.save();
+        g.translate(cx, cy);
+        g.rotate((i * Math.PI) / 2);
+        g.beginPath();
+        g.ellipse(0, -r * 0.55, r * 0.28, r * 0.55, 0, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
+      }
+      g.fillStyle = palette.heart;
+      g.beginPath();
+      g.arc(cx, cy, r * 0.2, 0, Math.PI * 2);
+      g.fill();
+    };
+    flower(w / 2, h / 2, w * 0.2);
+    for (const [cx, cy] of [[0, 0], [w, 0], [0, h], [w, h]]) flower(cx, cy, w * 0.2);
+    g.fillStyle = palette.star;
+    for (const [cx, cy] of [[w / 2, 0], [0, h / 2], [w, h / 2], [w / 2, h]]) {
+      g.beginPath();
+      g.arc(cx, cy, w * 0.025, 0, Math.PI * 2);
+      g.fill();
+    }
+  };
+  const make = (palette) => {
+    const tex = canvasTexture(128, 128, (g, w, h) => draw(g, w, h, palette));
+    tex.repeat.set(2.8, 2.8); // las UV de la cara van en unidades de la escena
+    return tex;
+  };
+  return {
+    color: make({ base: '#16245a', line: '#20327a', flower: '#213480', heart: '#2a4194', star: '#20327a' }),
+    bump: make({ base: '#404040', line: '#8a8a8a', flower: '#c8c8c8', heart: '#e0e0e0', star: '#8a8a8a' }),
+  };
+})();
+
+// Aluminio cepillado: vetas finas horizontales en grises claros (sirve de color y de
+// rugosidad a la vez)
+const brushedTexture = canvasTexture(256, 256, (g, w, h) => {
+  g.fillStyle = '#d8d8d8';
+  g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 900; i++) {
+    const v = 175 + Math.floor(Math.random() * 80);
+    g.fillStyle = `rgba(${v},${v},${v},0.5)`;
+    g.fillRect(Math.random() * w, Math.random() * h, 20 + Math.random() * 120, 1);
+  }
+});
+brushedTexture.repeat.set(1.5, 1.5);
+
+// Entorno para los reflejos del oro: cielo cálido, banda oscura y suelo tostado
+function goldEnvironment(r) {
+  const envCanvas = canvasTexture(256, 128, (g, w, h) => {
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#fff3d6');
+    grad.addColorStop(0.35, '#a9b6e8');
+    grad.addColorStop(0.5, '#1b2550');
+    grad.addColorStop(0.7, '#6b4a1c');
+    grad.addColorStop(1, '#2a1a08');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = 'rgba(255, 250, 235, 0.9)';
+    g.fillRect(w * 0.18, h * 0.12, w * 0.12, h * 0.1); // dos ventanas de luz para los brillos
+    g.fillRect(w * 0.62, h * 0.2, w * 0.08, h * 0.08);
+  });
+  envCanvas.mapping = THREE.EquirectangularReflectionMapping;
+  const pmrem = new THREE.PMREMGenerator(r);
+  const env = pmrem.fromEquirectangular(envCanvas).texture;
+  pmrem.dispose();
+  return env;
+}
+
+// Luces de las escenas de oro (cartelas y ornamentos), las mismas que la escena principal
+function addOrnamentLights(sc) {
+  sc.add(new THREE.HemisphereLight(0xdfe6ff, 0x2a1d3a, 0.6));
+  const key = new THREE.DirectionalLight(0xfff4e0, 0.8);
+  key.position.set(-0.6, 3.2, 3.5);
+  sc.add(key);
+  const fill = new THREE.DirectionalLight(0x7f9bff, 0.35);
+  fill.position.set(3, 0.5, 2);
+  sc.add(fill);
+}
+
+function makePedal(zone, car) {
+  const canvasEl = document.createElement('canvas');
+  canvasEl.className = 'pedal';
+  canvasEl.setAttribute('aria-hidden', 'true');
+  zone.prepend(canvasEl);
+
+  // La cámara mira un poco desde arriba: la cartela se ve algo más baja que su contorno
+  const W = CARTOUCHE.w;
+  const H = Math.round(CARTOUCHE.h * Math.cos(CARTOUCHE.pitch));
+  const r = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  r.setSize(W, H, false);
+  r.setClearColor(0x000000, 0);
+
+  const sc = new THREE.Scene();
+  addOrnamentLights(sc);
+
+  // Cámara ortográfica: así el borde de la cartela coincide justo con el borde del cartel
+  const halfW = (CARTOUCHE.w * PX) / 2;
+  const halfH = ((CARTOUCHE.h * PX) / 2) * Math.cos(CARTOUCHE.pitch);
+  const cam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.1, 30);
+  const target = new V3(halfW, (CARTOUCHE.h * PX) / 2, 0);
+  cam.position.copy(target).add(new V3(0, Math.sin(CARTOUCHE.pitch), Math.cos(CARTOUCHE.pitch)).multiplyScalar(10));
+  cam.lookAt(target);
+
+  sc.environment = goldEnvironment(r);
+
+  const gold = new THREE.MeshStandardMaterial({ color: '#f2be52', roughness: 0.3, metalness: 0.9 });
+  // Fondo del hueco, oscuro, para que se vea cómo se hunde el pedal
+  const plaqueMat = new THREE.MeshStandardMaterial({
+    map: brocadeTexture.color,
+    color: '#5a647e',
+    roughness: 0.8,
+    envMapIntensity: 0.2,
+  });
+
+  // En el lado derecho todo se refleja, con el borde del cartel a la derecha
+  const root = new THREE.Group();
+  if (zone.classList.contains('boost--right')) {
+    root.scale.x = -1;
+    root.position.x = CARTOUCHE.w * PX;
+  }
+  sc.add(root);
+  buildCartouche(root, gold, plaqueMat);
+
+  // El pedal es el interior del marco
+  const { pivot, plateMat } = buildFramePedal(root, car);
+
+  const glowLight = new THREE.PointLight(car.color, 0, 2.2, 2);
+  glowLight.position.set(0.42, (CARTOUCHE.h * PX) / 2, 0.7);
+  root.add(glowLight);
+
+  const pedal = {
+    zone,
+    car,
+    canvas: canvasEl,
+    renderer: r,
+    scene: sc,
+    camera: cam,
+    pivot,
+    pivotHome: pivot.position.clone(),
+    plateMat,
+    glowLight,
+    press: 0, // 0 = suelto, 1 = pisado (con muelle, puede pasarse un poco)
+    velocity: 0,
+    glow: 0,
+    dirty: true,
+  };
+  return pedal;
+}
+
+const pedals = cars.map((car) => makePedal(document.getElementById(car.boostZone), car));
+
+// Dirección que se aleja de la cámara (la cámara mira desde arriba con CARTOUCHE.pitch)
+const PEDAL_AWAY = new V3(0, -Math.sin(CARTOUCHE.pitch), -Math.cos(CARTOUCHE.pitch));
+
+// Muelle de la placa y brillo; solo se vuelve a dibujar mientras se mueve
+function updatePedals(dt) {
+  for (const p of pedals) {
+    const target = p.car.boost ? 1 : 0;
+    p.velocity += ((target - p.press) * PEDAL.stiffness - p.velocity * PEDAL.damping) * dt;
+    p.press += p.velocity * dt;
+    p.glow += ((p.car.boost ? 1 : 0) - p.glow) * Math.min(1, dt * 8);
+    const moving = Math.abs(p.velocity) > 0.002 || Math.abs(target - p.press) > 0.002 || (p.glow > 0.002 && p.glow < 0.998);
+    if (!moving && !p.dirty) continue;
+    // Se hunde recto, en la dirección de la mirada (así no salta hacia arriba en pantalla),
+    // y se encoge un poco hacia el borde del cartel
+    p.pivot.scale.setScalar(1 - PEDAL.pressScale * p.press);
+    p.pivot.position.copy(p.pivotHome).addScaledVector(PEDAL_AWAY, PEDAL.pressDepth * p.press);
+    p.plateMat.emissiveIntensity = 0.4 * p.glow;
+    p.glowLight.intensity = 2.0 * p.glow;
+    p.renderer.render(p.scene, p.camera);
+    p.dirty = false;
+  }
+}
+
+/* ---------- Ornamentos de oro del marco: esquinas y cresta del mensaje ----------
+   Las mismas piezas barrocas de la cartela (volutas de acanto, hojas y concha), con el
+   mismo oro y la misma luz. Como no se mueven, se dibujan una sola vez con un renderer
+   aparte, se pasan a imagen y se suelta ese contexto de WebGL.                       */
+
+// Dibuja un ornamento de w × h px (coordenadas como las de la cartela, con el origen
+// arriba a la izquierda) y devuelve la imagen. flipX/flipY lo reflejan sin cambiar la luz.
+function renderOrnament(r, { w, h, flipX = false, flipY = false, build }) {
+  const H = Math.round(h * Math.cos(CARTOUCHE.pitch));
+  r.setSize(w, H, false);
+
+  const sc = new THREE.Scene();
+  sc.environment = goldEnvironment(r);
+  addOrnamentLights(sc);
+
+  const top = CARTOUCHE.h * PX; // y de la escena para y = 0 px
+  const center = new V3((w / 2) * PX, top - (h / 2) * PX, 0);
+  const halfW = (w / 2) * PX;
+  const halfH = (h / 2) * PX * Math.cos(CARTOUCHE.pitch);
+  const cam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.1, 30);
+  cam.position.copy(center).add(new V3(0, Math.sin(CARTOUCHE.pitch), Math.cos(CARTOUCHE.pitch)).multiplyScalar(10));
+  cam.lookAt(center);
+
+  const group = new THREE.Group();
+  if (flipX) {
+    group.scale.x = -1;
+    group.position.x = 2 * center.x;
+  }
+  if (flipY) {
+    group.scale.y = -1;
+    group.position.y = 2 * center.y;
+  }
+  sc.add(group);
+  build(group, ORNAMENT_GOLD);
+
+  r.render(sc, cam);
+  return r.domElement.toDataURL('image/png');
+}
+
+const ORNAMENT_GOLD = new THREE.MeshStandardMaterial({ color: '#f2be52', roughness: 0.3, metalness: 0.9 });
+
+// Pone un grupo con su origen en (x, y) px y girado `angle` (radianes, en pantalla:
+// positivo = hacia abajo), para colocar piezas pensadas mirando a la derecha
+function placed(parent, x, y, angle) {
+  const g = new THREE.Group();
+  g.position.copy(cartoucheXY(x, y));
+  g.rotation.z = -angle;
+  parent.add(g);
+  return g;
+}
+
+// Esquina de arriba a la izquierda: concha mirando hacia dentro y una voluta con hojas
+// a lo largo de cada borde
+function buildCorner(group, gold) {
+  const z = 0.06;
+  const shell = placed(group, 15, 15, Math.PI / 4);
+  shellOrnament(shell, gold, 0, CARTOUCHE.h, z); // (0, h) px es el origen del grupo
+  acanthusScroll(group, gold, { x: 46, y: 13, r: 9, start: Math.PI, turns: 1.05, dir: 1, leafAngle: 0.2, z });
+  acanthusScroll(group, gold, { x: 13, y: 46, r: 9, start: -Math.PI / 2, turns: 1.05, dir: -1, leafAngle: -1.4, z });
+}
+
+// Cresta sobre el mensaje: concha hacia arriba y volutas con hojas a cada lado, unidas
+// por una moldura
+function buildCrest(group, gold) {
+  const z = 0.06;
+  const cx = 98;
+  const shell = placed(group, cx, 40, -Math.PI / 2);
+  shellOrnament(shell, gold, 0, CARTOUCHE.h, z);
+  for (const s of [-1, 1]) {
+    acanthusScroll(group, gold, {
+      x: cx + s * 52,
+      y: 34,
+      r: 11,
+      start: s > 0 ? Math.PI : 0,
+      turns: 1.1,
+      dir: s,
+      leafAngle: s > 0 ? Math.PI + 0.2 : -0.2,
+      z,
+    });
+  }
+  const rail = new THREE.CatmullRomCurve3([
+    cartoucheXY(8, 48).setZ(z),
+    cartoucheXY(cx, 50).setZ(z),
+    cartoucheXY(188, 48).setZ(z),
+  ]);
+  group.add(new THREE.Mesh(taperedTube(rail, 0.018, 0.018), gold));
+  for (const x of [8, 188]) {
+    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.025, 14, 10), gold);
+    bead.position.copy(cartoucheXY(x, 48)).setZ(z);
+    group.add(bead);
+  }
+}
+
+(function placeFrameOrnaments() {
+  const r = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2) * 1.5);
+  r.setClearColor(0x000000, 0);
+
+  const CORNER = 72;
+  for (const el of document.querySelectorAll('.frame__corner')) {
+    el.src = renderOrnament(r, {
+      w: CORNER,
+      h: CORNER,
+      flipX: el.classList.contains('frame__corner--right'),
+      flipY: el.classList.contains('frame__corner--bottom'),
+      build: buildCorner,
+    });
+  }
+  document.getElementById('messageCrest').src = renderOrnament(r, { w: 196, h: 64, build: buildCrest });
+
+  r.dispose();
+  r.forceContextLoss();
+})();
+
+/* ---------- Semáforo y texto del pie ---------- */
+
+const LIGHT_OFF = { bg: '#2a2f4d', glow: 'inset 0 0 0 2px rgba(247, 239, 224, 0.15)' };
+const LIGHT_RED = { bg: '#ff3048', glow: '0 0 14px 3px rgba(255, 48, 72, 0.7)' };
+const LIGHT_GREEN = { bg: '#3ee07a', glow: '0 0 14px 3px rgba(62, 224, 122, 0.75)' };
+
+let lastLightKey = '';
+
+function setLights(redCount, green) {
+  const key = `${redCount}-${green}`;
+  if (key === lastLightKey) return;
+  lastLightKey = key;
+  lightEls.forEach((el, i) => {
+    const look = green ? LIGHT_GREEN : i < redCount ? LIGHT_RED : LIGHT_OFF;
+    el.style.background = look.bg;
+    el.style.boxShadow = look.glow;
+  });
+  gantryLights.forEach((mat, i) => {
+    if (green) {
+      mat.color.set('#3ee07a');
+      mat.emissive.set('#2bd16a');
+    } else if (i < redCount) {
+      mat.color.set('#ff3048');
+      mat.emissive.set('#ff1030');
+    } else {
+      mat.color.set('#2a2f4d');
+      mat.emissive.set('#000000');
+    }
+  });
+}
+
+let lastHint = '';
+
+function setHint(text) {
+  if (text === lastHint) return;
+  lastHint = text;
+  hintEl.textContent = text;
+}
+
+/* ---------- Ciclo de la carrera ----------
+   parked → countdown → racing → racing otra vez si el ratón sigue encima, o parked si no.
+
+   Durante «racing» cada coche va a su ritmo (car.stage):
+   race (baja y entra en la caja) → inside (pausa corta dentro) → return (sale de la caja
+   y sube por la izquierda) → grid (espera en la parrilla). El único punto en el que se
+   esperan es la parrilla: la siguiente carrera arranca cuando están los dos.
+   El turbo de cada coche acelera la bajada, acorta la pausa dentro de la caja y acelera
+   la salida y la subida.                                                             */
+
+function setPhase(phase) {
+  state.phase = phase;
+  state.phaseTime = 0;
+}
+
+function startRace() {
+  state.raceTime = 0;
+  state.winner = null;
+  // Cada carrera es distinta: velocidades y oscilaciones al azar
+  const lead = Math.random() < 0.5 ? 0 : 1;
+  cars.forEach((car, i) => {
+    car.stage = 'race';
+    car.s = PARK_S + car.grid;
+    car.v = 0;
+    car.vmax = CONFIG.baseSpeed * (i === lead ? rand(1.0, 1.05) : rand(0.95, 1.0));
+    car.freq = rand(1.2, 2.4);
+    car.phaseOff = rand(0, Math.PI * 2);
+    car.group.visible = true;
+    clearTrail(car);
+  });
+  setPhase('racing');
+}
+
+// Oscurece el coche según lo hundido que esté en la caja (el mismo fundido que la pista)
+function shadeCar(car) {
+  const p = car.group.position;
+  const light = boxFade(p.x, p.y, p.z);
+  car.group.visible = light > 0.02;
+  if (Math.abs(light - car.light) < 0.004) return light;
+  car.light = light;
+  for (const { m, color, emissive } of car.shades) {
+    m.color.copy(color).multiplyScalar(light);
+    m.emissiveIntensity = emissive * light;
+  }
+  return light;
+}
+
+function carEntersBox(car) {
+  car.stage = 'inside';
+  car.insideTime = 0;
+  car.group.visible = false;
+  clearTrail(car);
+  if (!state.winner) state.winner = car;
+  deliverGift();
+  burstConfetti(state.winner === car ? 110 : 60);
+  kick(springs.box, 3.2);
+  kick(springs.lid, 4.5);
+  springs.glow = 1;
+}
+
+// Sale de la caja en cuanto acaba su pausa, sin esperar al otro coche
+function carExitsBox(car) {
+  car.stage = 'return';
+  car.s = S_OUT - 0.5;
+  car.v = 2.5 + 3 * car.boostMix;
+  car.vmax = CONFIG.climbSpeed * rand(0.95, 1.05);
+  car.group.visible = false;
+  clearTrail(car);
+  kick(springs.box, 1.8);
+  kick(springs.lid, 2.4);
+  springs.glow = Math.max(springs.glow, 0.6);
+  burstConfetti(25);
+}
+
+// Turbo: la mezcla sigue al pedal con suavidad, para que acelere y frene sin tirones
+function updateBoost(car, dt) {
+  const goal = car.boost ? 1 : 0;
+  car.boostMix += (goal - car.boostMix) * Math.min(1, dt * CONFIG.boostEase);
+  return 1 + CONFIG.boostGain * car.boostMix;
+}
+
+// Acerca la velocidad a la deseada: acelera con fuerza y frena suave al soltar el turbo
+function approachSpeed(car, target, dt, accel) {
+  if (car.v < target) car.v = Math.min(car.v + accel * dt, target);
+  else car.v = Math.max(target, car.v - CONFIG.accel * 0.8 * dt);
+}
+
+// Coche parado en la parrilla, con el motor al ralentí
+function idleOnGrid(car, i, rev) {
+  car.group.visible = true;
+  placeOnTrack(car.group, PARK_S + car.grid, car.lane, Math.abs(Math.sin(state.time * 48 + i * 1.7)) * rev);
+}
+
+function updateCars(dt) {
+  const turbo = cars.map((car) => updateBoost(car, dt));
+
+  if (state.phase === 'racing') {
+    state.raceTime += dt;
+    cars.forEach((car, i) => {
+      const accel = CONFIG.accel * (1 + 1.5 * car.boostMix);
+
+      if (car.stage === 'race') {
+        const f0 = frameAt(car.s);
+        const target = car.vmax * turbo[i] * (1 + 0.07 * Math.sin(state.raceTime * car.freq + car.phaseOff));
+        approachSpeed(car, target, dt, accel);
+        car.v += Math.max(0, -f0.t.y) * 7 * dt; // en las bajadas cogen velocidad
+        car.s += car.v * dt;
+        if (car.s >= S_IN) {
+          carEntersBox(car);
+          return;
+        }
+        const f = placeOnTrack(car.group, car.s, car.lane, 0);
+        const light = shadeCar(car);
+        for (const w of car.wheels) w.rotation.x += (car.v * dt) / 0.05;
+        updateTrail(car, f, clamp(car.v / CONFIG.baseSpeed, 0, 1.4) * light);
+      } else if (car.stage === 'inside') {
+        // Pausa dentro de la caja; con turbo dura menos
+        car.insideTime += dt * (1 + 2 * car.boostMix);
+        if (car.insideTime >= CONFIG.insidePause) carExitsBox(car);
+      } else if (car.stage === 'return') {
+        // Sale de la caja, sube por la izquierda y frena en la parrilla
+        const goal = TRACK_LEN + PARK_S + car.grid; // una vuelta completa después
+        approachSpeed(car, car.vmax * turbo[i], dt, accel);
+        const brake = clamp((goal - car.s) / 1.2, 0.25, 1);
+        car.s = Math.min(goal, car.s + car.v * brake * dt);
+        const f = placeOnTrack(car.group, car.s, car.lane, 0);
+        const light = shadeCar(car); // sale de la oscuridad de la caja
+        for (const w of car.wheels) w.rotation.x += (car.v * brake * dt) / 0.05;
+        if (car.group.visible) updateTrail(car, f, clamp((car.v * brake) / CONFIG.baseSpeed, 0, 1.4) * 0.8 * light);
+        if (car.s >= goal) {
+          car.stage = 'grid';
+          car.s = PARK_S + car.grid;
+          clearTrail(car);
+        }
+      } else {
+        idleOnGrid(car, i, 0.003); // espera al otro coche en la parrilla
+      }
+    });
+
+    if (cars.every((c) => c.stage === 'grid')) {
+      // Con el ratón encima el bucle no para; si no, se quedan en la parrilla esperando
+      if (state.hover) startRace();
+      else setPhase('parked');
+    }
+    return;
+  }
+
+  // parked / countdown: motores al ralentí, tiemblan más cuanto más cerca está la salida
+  const rev = state.phase === 'countdown' ? 0.006 : state.hover ? 0.003 : 0.0012;
+  cars.forEach((car, i) => {
+    idleOnGrid(car, i, rev);
+    car.tailMat.emissiveIntensity = state.phase === 'countdown' ? 1.2 : 0.6;
+  });
+}
+
+function updatePhase(dt) {
+  state.phaseTime += dt;
+  const step = CONFIG.countdownStep;
+
+  switch (state.phase) {
+    case 'parked':
+      setLights(0, false);
+      setHint(state.hover ? 'Preparados…' : TOUCH_ONLY ? 'Toca el cartel y que empiece' : 'Pasa el ratón y que empiece');
+      if (state.hover && state.phaseTime > CONFIG.relaunchPause) setPhase('countdown');
+      break;
+
+    case 'countdown': {
+      if (!state.hover) {
+        setPhase('parked');
+        state.phaseTime = 99;
+        break;
+      }
+      const reds = Math.min(3, Math.floor(state.phaseTime / step) + 1);
+      setLights(reds, false);
+      setHint(['Preparados…', 'Listos…', 'Listos…'][reds - 1]);
+      if (state.phaseTime >= step * 3.4) startRace();
+      break;
+    }
+
+    case 'racing': {
+      setLights(0, state.raceTime < CONFIG.goHold);
+      const returning = cars.some((c) => c.stage === 'return' || c.stage === 'grid');
+      if (returning) setHint(state.hover ? 'Tu donación es un regalo' : 'Vuelta a la salida');
+      else setHint(state.winner ? '¡Un regalo entregado!' : '¡Ya!');
+      // Mientras haya algún coche dentro, la caja da saltitos
+      if (cars.some((c) => c.stage === 'inside') && Math.random() < dt * 5) kick(springs.box, rand(0.6, 1.4));
+      break;
+    }
+  }
+}
+
+/* ---------- Paralaje y animación de la escena ---------- */
+
+function updateScene(dt) {
+  const s = state.smooth;
+  const follow = REDUCED_MOTION ? 0 : 1; // sin paralaje ni giro de cámara
+  s.x = lerp(s.x, state.mouse.x * follow, 1 - Math.exp(-dt * 4));
+  s.y = lerp(s.y, state.mouse.y * follow, 1 - Math.exp(-dt * 4));
+
+  camera.position.set(CAM_BASE.x + s.x * 2.4, CAM_BASE.y - s.y * 1.4, CAM_BASE.z);
+  camera.lookAt(CAM_LOOK);
+
+  titleLayer.style.transform = `translate(${(-s.x * 14).toFixed(2)}px, ${(-s.y * 8).toFixed(2)}px)`;
+  metaLayer.style.transform = `translate(${(-s.x * 6).toFixed(2)}px, ${(-s.y * 4).toFixed(2)}px)`;
+  footLayer.style.transform = `translate(${(-s.x * 6).toFixed(2)}px, ${(-s.y * 4).toFixed(2)}px)`;
+  sceneLayer.style.transform = `translate(${(s.x * 6).toFixed(2)}px, ${(s.y * 6).toFixed(2)}px)`;
+
+  stepSpring(springs.box, dt);
+  stepSpring(springs.lid, dt, 120, 7);
+  const b = springs.box.x * (REDUCED_MOTION ? 0.3 : 1);
+  boxGroup.scale.set(1 + b * 0.05, 1 - b * 0.08, 1 + b * 0.05);
+  boxGroup.rotation.z = REDUCED_MOTION ? 0 : Math.sin(state.time * 31) * b * 0.02;
+
+  const l = springs.lid.x;
+  lidPivot.position.y = LID_BASE.y + Math.max(0, l) * 0.25;
+  lidGroup.rotation.x = LID_BASE.tilt - l * 0.08;
+
+  springs.glow = Math.max(0, springs.glow - dt * 1.4);
+  boxGlow.intensity = 0.3 + springs.glow * 3.5 + Math.sin(state.time * 2) * 0.1;
+}
+
+/* ---------- Eventos ---------- */
+
 function toPosterCoords(clientX, clientY) {
   const rect = poster.getBoundingClientRect();
   return {
@@ -148,1717 +2117,208 @@ function toPosterCoords(clientX, clientY) {
   };
 }
 
-/* ==========================================================
-   2. TITULAR: una caja por letra
-   ========================================================== */
-
-function buildTitle() {
-  const lines = titleEl.dataset.lines.split('|');
-  titleEl.textContent = '';
-  titleEl.setAttribute('aria-label', lines.join(' '));
-
-  lines.forEach((line) => {
-    const lineEl = document.createElement('span');
-    lineEl.className = 'title__line';
-    lineEl.setAttribute('aria-hidden', 'true');
-
-    [...line].forEach((char) => {
-      if (char === ' ') {
-        const space = document.createElement('span');
-        space.className = 'title__space';
-        lineEl.appendChild(space);
-        return;
-      }
-
-      const letterEl = document.createElement('span');
-      letterEl.className = 'letter';
-      const glyph = document.createElement('span');
-      glyph.className = 'glyph';
-      glyph.textContent = char;
-      letterEl.appendChild(glyph);
-      lineEl.appendChild(letterEl);
-
-      const letter = {
-        el: letterEl,
-        glyph,
-        offset: rand(0, 0.4),       // cuándo empieza a deshojarse
-        regrowAt: rand(0.15, 0.5),  // cuándo se repuebla en el rebrote
-        droop: rand(4, 16),
-        tilt: rand(-9, 9),
-        value: 0,                   // 0 = gruesa · 1 = fina y marchita
-        lastValue: -1,
-        shed: 0,
-        absorb: 0,
-        x: 0, y: 0, w: 0, h: 0,
-      };
-      letters.push(letter);
-      letterByEl.set(letterEl, letter);
-
-      letterEl.addEventListener('mouseenter', handleLetterEnter);
-      letterEl.addEventListener('mouseleave', handleLetterLeave);
-    });
-
-    titleEl.appendChild(lineEl);
-  });
+function handlePosterEnter() {
+  state.hover = true;
 }
 
-// Fija el ancho de cada letra con su versión gruesa para que no "baile" al adelgazar
-function measureLetters() {
-  const posterRect = poster.getBoundingClientRect();
-  letters.forEach((letter) => {
-    const rect = letter.el.getBoundingClientRect();
-    letter.x = (rect.left - posterRect.left) / state.scale - state.titleOffset.x;
-    letter.y = (rect.top - posterRect.top) / state.scale - state.titleOffset.y;
-    letter.h = rect.height / state.scale;
-    if (letter.w === 0) {
-      letter.w = rect.width / state.scale;
-      letter.el.style.width = `${letter.w}px`;
-    }
-  });
-}
-
-function letterCenter(letter) {
-  return {
-    x: letter.x + letter.w / 2 + state.titleOffset.x,
-    y: letter.y + letter.h * 0.55 + state.titleOffset.y,
-  };
-}
-
-function applyLetterStyle(letter) {
-  const v = letter.value;
-  if (Math.abs(v - letter.lastValue) < 0.001) return;
-  letter.lastValue = v;
-
-  const wght = Math.round(900 - 800 * v);
-  const wdth = Math.round(112 - 30 * v);
-
-  letter.glyph.style.fontVariationSettings = `"wght" ${wght}, "wdth" ${wdth}`;
-  letter.glyph.style.color = mixRGB(LETTER_ROSE, LETTER_WILT, smoothstep(0, 1, v));
-  letter.glyph.style.transform = `translateY(${(v * letter.droop).toFixed(1)}px) rotate(${(v * letter.tilt).toFixed(2)}deg)`;
-  letter.glyph.style.opacity = (1 - 0.25 * v).toFixed(3);
-}
-
-function updateLetters(dt) {
-  letters.forEach((letter) => {
-    let target;
-
-    if (state.phase === 'regrow') {
-      target = 1 - smoothstep(letter.regrowAt, letter.regrowAt + 0.45, state.regrow);
-    } else if (state.phase === 'withered') {
-      target = 1;
-    } else {
-      target = clamp((state.decay - letter.offset) / 0.55, 0, 1);
-
-      // Las letras cercanas al cursor se deshojan antes
-      if (state.hovering && letter.w > 0) {
-        const c = letterCenter(letter);
-        const dist = Math.hypot(state.pointer.x - c.x, state.pointer.y - c.y);
-        target = Math.min(1, target + Math.max(0, 1 - dist / 170) * 0.3);
-      }
-    }
-
-    const previous = letter.value;
-    letter.value += (target - letter.value) * Math.min(1, dt * 8);
-    const delta = letter.value - previous;
-
-    if (delta > 0) {
-      letter.shed += delta * CONFIG.letterPetals;
-      while (letter.shed >= 1) {
-        letter.shed -= 1;
-        spawnFlatPetal(letter, 'fall');
-      }
-    } else if (delta < 0 && state.phase === 'regrow') {
-      letter.absorb += -delta * CONFIG.letterPetals * 0.6;
-      while (letter.absorb >= 1) {
-        letter.absorb -= 1;
-        spawnFlatPetal(letter, 'absorb');
-      }
-    }
-
-    applyLetterStyle(letter);
-  });
-}
-
-/* ==========================================================
-   3. PÉTALOS 2D (se desprenden de las letras)
-   ========================================================== */
-
-function setupPetalCanvas() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  petalCanvas.width = POSTER_W * dpr;
-  petalCanvas.height = POSTER_H * dpr;
-  petalCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-function spawnFlatPetal(letter, mode) {
-  if (letter.w === 0 || flatPetals.length >= CONFIG.maxFlatPetals) return;
-
-  const x = letter.x + state.titleOffset.x + rand(0.15, 0.85) * letter.w;
-  const y = letter.y + state.titleOffset.y + rand(0.25, 0.85) * letter.h;
-
-  if (mode === 'fall') {
-    flatPetals.push({
-      mode,
-      x, y,
-      vx: rand(-30, 30),
-      vy: rand(-50, 0),
-      rot: rand(0, Math.PI * 2),
-      vrot: rand(-3, 3),
-      flip: rand(0, Math.PI * 2),
-      vflip: rand(3, 7),
-      size: rand(9, 16),
-      life: 0,
-      maxLife: rand(2.2, 3.4),
-      // Vuelo: balanceo lateral, viento y velocidad de caída propios
-      freq: rand(2, 3.5),
-      phase: rand(0, Math.PI * 2),
-      amp: rand(40, 80),
-      wind: rand(-15, 15),
-      fall: rand(100, 160),
-      color: mixRGB(LETTER_ROSE, LETTER_WILT, clamp(letter.value + rand(-0.15, 0.15), 0, 1)),
-    });
-  } else {
-    const angle = rand(0, Math.PI * 2);
-    const radius = rand(60, 130);
-    flatPetals.push({
-      mode,
-      sx: x + Math.cos(angle) * radius,
-      sy: y + Math.abs(Math.sin(angle)) * radius,
-      tx: x,
-      ty: y,
-      x, y,
-      rot: rand(0, Math.PI * 2),
-      vrot: rand(-4, 4),
-      flip: rand(0, Math.PI * 2),
-      vflip: rand(3, 7),
-      size: rand(8, 13),
-      life: 0,
-      maxLife: rand(0.45, 0.7),
-      color: mixRGB(LETTER_ROSE, [255, 200, 215], Math.random()),
-    });
-  }
-}
-
-// Ráfaga de pétalos al pasar el ratón por una letra
-function burstLetter(letter, amount) {
-  for (let i = 0; i < amount; i++) {
-    spawnFlatPetal(letter, 'fall');
-    const petal = flatPetals[flatPetals.length - 1];
-    if (petal) {
-      petal.vx = rand(-90, 90);
-      petal.vy = rand(-140, -40);
-    }
-  }
-}
-
-// Pétalo de rosa: base estrecha abajo, borde redondeado con muesca arriba.
-// La forma se crea una sola vez y se reutiliza en todos los pétalos.
-const PETAL_PATH = new Path2D();
-PETAL_PATH.moveTo(0, 1);
-PETAL_PATH.bezierCurveTo(-0.3, 0.8, -0.75, 0.2, -0.62, -0.45);
-PETAL_PATH.bezierCurveTo(-0.52, -0.95, -0.15, -1.02, 0, -0.82);
-PETAL_PATH.bezierCurveTo(0.15, -1.02, 0.52, -0.95, 0.62, -0.45);
-PETAL_PATH.bezierCurveTo(0.75, 0.2, 0.3, 0.8, 0, 1);
-
-// El degradado de cada pétalo se crea una vez, al nacer, y no en cada frame
-function getPetalFill(p) {
-  if (!p.fill) {
-    p.fill = petalCtx.createLinearGradient(0, 1, 0, -1);
-    p.fill.addColorStop(0, 'rgba(60, 10, 25, 0.9)');
-    p.fill.addColorStop(0.55, p.color);
-  }
-  return p.fill;
-}
-
-function updateFlatPetals(dt) {
-  const dpr = petalCanvas.width / POSTER_W;
-  petalCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  petalCtx.clearRect(0, 0, POSTER_W, POSTER_H);
-
-  for (let i = flatPetals.length - 1; i >= 0; i--) {
-    const p = flatPetals[i];
-    p.life += dt;
-    p.rot += p.vrot * dt;
-    p.flip += p.vflip * dt;
-
-    let alpha;
-    let size = p.size;
-
-    if (p.mode === 'fall') {
-      // Como una hoja: se balancea y cae más despacio en los extremos del balanceo
-      const swing = Math.sin(p.life * p.freq + p.phase);
-      p.vx = lerp(p.vx, p.wind + swing * p.amp, Math.min(1, dt * 3));
-      p.vy = lerp(p.vy, p.fall * (1 - 0.75 * Math.abs(swing)), Math.min(1, dt * 2));
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      alpha = 1 - smoothstep(p.maxLife * 0.7, p.maxLife, p.life);
-    } else {
-      const t = clamp(p.life / p.maxLife, 0, 1);
-      const e = easeOutCubic(t);
-      p.x = lerp(p.sx, p.tx, e);
-      p.y = lerp(p.sy, p.ty, e);
-      alpha = Math.sin(Math.PI * t);
-      size *= 1 - t * 0.7;
-    }
-
-    if (p.life >= p.maxLife || p.y > POSTER_H + 20) {
-      // Quitar sin desplazar el array: el último ocupa su lugar
-      flatPetals[i] = flatPetals[flatPetals.length - 1];
-      flatPetals.pop();
-      continue;
-    }
-
-    petalCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    petalCtx.globalAlpha = alpha;
-    petalCtx.translate(p.x, p.y);
-    petalCtx.rotate(p.rot);
-    petalCtx.scale(size * (0.25 + 0.75 * Math.abs(Math.cos(p.flip))), size);
-    petalCtx.fillStyle = getPetalFill(p);
-    petalCtx.fill(PETAL_PATH);
-  }
-  petalCtx.globalAlpha = 1;
-}
-
-/* ==========================================================
-   4. ESCENA 3D: el cerebro-rosa
-   ========================================================== */
-
-let renderer, scene, camera, pivot, brain;
-let petalMesh, fallMesh, skeleton, stem, leaves;
-let petals;      // datos de cada pétalo del cerebro
-const fallPool = [];
-let fallCount = 0;   // pétalos cayendo ahora mismo
-const brainWorldQuat = new THREE.Quaternion();
-
-function initScene() {
-  renderer = new THREE.WebGLRenderer({ canvas: brainCanvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setSize(POSTER_W, POSTER_H, false);
-
-  scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(30, POSTER_W / POSTER_H, 1, 3000);
-  camera.position.set(0, 0, 820);
-
-  scene.add(new THREE.HemisphereLight(0xffd6e2, 0x2a0a14, 0.75));
-  const key = new THREE.DirectionalLight(0xffffff, 0.9);
-  key.position.set(-300, 420, 500);
-  scene.add(key);
-  const rim = new THREE.DirectionalLight(0xff4f8a, 0.9);
-  rim.position.set(260, -80, -420);
-  scene.add(rim);
-
-  // El pivote está en la punta del tallo: desde ahí el cerebro "cabecea" al marchitarse
-  pivot = new THREE.Group();
-  pivot.position.set(0, STEM_TOP_Y, 0);
-  scene.add(pivot);
-
-  brain = new THREE.Group();
-  brain.position.y = 62;
-  brain.scale.setScalar(BRAIN_SCALE);
-  brain.rotation.y = BRAIN_BASE_ROT_Y;
-  pivot.add(brain);
-
-  createBrainPetals();
-  createFallingPetals();
-  createStem();
-}
-
-// Pétalo de rosa: base estrecha en el origen, borde redondeado con muesca hacia +Y,
-// cóncavo hacia +Z y con la punta curvada hacia fuera. Más oscuro en la base.
-function createPetalGeometry() {
-  const shape = new THREE.Shape();
-  shape.moveTo(0, 0);
-  shape.bezierCurveTo(-0.35, 0.12, -0.8, 0.55, -0.68, 1.02);
-  shape.bezierCurveTo(-0.58, 1.38, -0.18, 1.42, 0, 1.28);
-  shape.bezierCurveTo(0.18, 1.42, 0.58, 1.38, 0.68, 1.02);
-  shape.bezierCurveTo(0.8, 0.55, 0.35, 0.12, 0, 0);
-
-  const geometry = new THREE.ShapeGeometry(shape, 10);
-  const pos = geometry.attributes.position;
-  const colors = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    pos.setZ(i, 0.7 * x * x + 0.3 * y * y - 0.12 * Math.pow(Math.max(y - 0.9, 0), 2) * 10);
-    const shade = 0.5 + 0.5 * smoothstep(0, 1.2, y);
-    colors.set([shade, shade, shade], i * 3);
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function createBrainPetals() {
-  const raw = window.BRAIN_POINTS;
-  const rawCount = raw.length / 3;
-
-  // Centro y semiejes del modelo
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < rawCount; i++) {
-    for (let k = 0; k < 3; k++) {
-      min[k] = Math.min(min[k], raw[i * 3 + k]);
-      max[k] = Math.max(max[k], raw[i * 3 + k]);
-    }
-  }
-  const center = min.map((m, k) => (m + max[k]) / 2);
-  const half = min.map((m, k) => (max[k] - m) / 2);
-
-  // Muestreo en rejilla: un solo pétalo por celda para que sean menos y más grandes
-  const picked = [];
-  const cells = new Set();
-  for (let i = 0; i < rawCount; i++) {
-    const key = [0, 1, 2].map((k) => Math.floor((raw[i * 3 + k] - min[k]) / PETAL_SPACING)).join(',');
-    if (!cells.has(key)) {
-      cells.add(key);
-      picked.push(i);
-    }
-  }
-  const count = picked.length;
-
-  petals = {
-    count,
-    base: new Float32Array(count * 3),
-    normal: new Float32Array(count * 3),
-    rot: new Float32Array(count * 9),
-    quat: new Float32Array(count * 4),
-    size: new Float32Array(count),
-    color: new Float32Array(count * 3),
-    state: new Uint8Array(count),
-    grow: new Float32Array(count),
-    threshold: null,
-    sprout: null,
-  };
-
-  const decayOrder = new Float32Array(count);
-  const sproutOrder = new Float32Array(count);
-  const n = new THREE.Vector3();
-  const q = new THREE.Quaternion();
-  const qSpin = new THREE.Quaternion();
-  const qTilt = new THREE.Quaternion();
-  const m = new THREE.Matrix4();
-  const Z = new THREE.Vector3(0, 0, 1);
-  const X = new THREE.Vector3(1, 0, 0);
-  const color = new THREE.Color();
-
-  for (let i = 0; i < count; i++) {
-    const j = picked[i];
-    const x = raw[j * 3] - center[0];
-    const y = raw[j * 3 + 1] - center[1];
-    const z = raw[j * 3 + 2] - center[2];
-    petals.base.set([x, y, z], i * 3);
-
-    // Normal aproximada de un elipsoide (el cerebro es alargado)
-    n.set(x / (half[0] * half[0]), y / (half[1] * half[1]), z / (half[2] * half[2])).normalize();
-    petals.normal.set([n.x, n.y, n.z], i * 3);
-
-    // Orientación: tangente a la superficie, punta levantada como en una rosa
-    q.setFromUnitVectors(Z, n);
-    qSpin.setFromAxisAngle(Z, rand(0, Math.PI * 2));
-    qTilt.setFromAxisAngle(X, rand(0.5, 1.05));
-    q.multiply(qSpin).multiply(qTilt);
-    petals.quat.set([q.x, q.y, q.z, q.w], i * 4);
-
-    m.makeRotationFromQuaternion(q);
-    const e = m.elements;
-    petals.rot.set([e[0], e[1], e[2], e[4], e[5], e[6], e[8], e[9], e[10]], i * 9);
-
-    petals.size[i] = rand(9, 13);
-
-    color.copy(COLORS.roseDeep).lerp(COLORS.roseLight, Math.pow(Math.random(), 1.5) * 0.85);
-    petals.color.set([color.r, color.g, color.b], i * 3);
-
-    // Orden de caída: a "cachos" (ruido) y de arriba abajo
-    const heightN = (y + half[1]) / (2 * half[1]);
-    const patch = Math.sin(x * 0.07 + 1.3) * Math.sin(y * 0.09 + 0.4) * Math.sin(z * 0.06 + 2.1)
-      + 0.5 * Math.sin(x * 0.15 + z * 0.11);
-    decayOrder[i] = 0.5 * patch + 0.3 * Math.random() + 0.35 * heightN;
-
-    // Orden de rebrote: desde abajo (el tallo) hacia arriba
-    sproutOrder[i] = 0.75 * heightN + 0.25 * Math.random();
-  }
-
-  // Los primeros en caer tienen umbral bajo; todos han caído al llegar a 0.9
-  petals.threshold = rankNormalize(decayOrder).map((r) => 0.04 + 0.86 * (1 - r));
-  petals.sprout = rankNormalize(sproutOrder).map((r) => r * 0.82);
-
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.55,
-    metalness: 0,
-    vertexColors: true,
-    side: THREE.DoubleSide,
-  });
-  petalMesh = new THREE.InstancedMesh(createPetalGeometry(), material, count);
-  petalMesh.frustumCulled = false;
-  petalMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  for (let i = 0; i < count; i++) {
-    petalMesh.setColorAt(i, color.setRGB(1, 1, 1));
-  }
-  brain.add(petalMesh);
-
-  // "Esqueleto": la nube de puntos original, visible cuando caen los pétalos
-  const skeletonPositions = new Float32Array(rawCount * 3);
-  for (let i = 0; i < rawCount; i++) {
-    for (let k = 0; k < 3; k++) skeletonPositions[i * 3 + k] = raw[i * 3 + k] - center[k];
-  }
-  const skeletonGeometry = new THREE.BufferGeometry();
-  skeletonGeometry.setAttribute('position', new THREE.BufferAttribute(skeletonPositions, 3));
-  skeleton = new THREE.Points(skeletonGeometry, new THREE.PointsMaterial({
-    color: 0xc79aa6,
-    size: 1.3,
-    transparent: true,
-    opacity: 0.2,
-    depthWrite: false,
-  }));
-  brain.add(skeleton);
-}
-
-function createFallingPetals() {
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.6,
-    vertexColors: true,
-    side: THREE.DoubleSide,
-  });
-  fallMesh = new THREE.InstancedMesh(createPetalGeometry(), material, CONFIG.fallPool);
-  fallMesh.frustumCulled = false;
-  fallMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-
-  const white = new THREE.Color(1, 1, 1);
-  for (let i = 0; i < CONFIG.fallPool; i++) {
-    fallMesh.setColorAt(i, white);
-    fallPool.push({
-      pos: new THREE.Vector3(),
-      vel: new THREE.Vector3(),
-      quat: new THREE.Quaternion(),
-      axis: new THREE.Vector3(),
-      spin: 0,
-      size: 1,
-      life: 0,
-      sway: 0,
-      color: new THREE.Color(),
-    });
-  }
-  // Después de crear los colores (setColorAt reserva memoria según count):
-  // solo se dibujan los pétalos que están cayendo
-  fallMesh.count = 0;
-  scene.add(fallMesh);
-}
-
-// Hoja de papiroflexia: dos triángulos plegados por el nervio central
-function createOrigamiLeafGeometry() {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-    0, 0, 0, -0.45, 0.55, 0.3, 0, 1.4, 0,
-    0, 0, 0, 0, 1.4, 0, 0.45, 0.55, 0.3,
-  ]), 3));
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function createStem() {
-  // Tallo de papiroflexia: tramos rectos (tensión 0), sección cuadrada y sombreado plano
-  const curve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(74, -270, 0),
-    new THREE.Vector3(46, -242, 10),
-    new THREE.Vector3(30, -212, 14),
-    new THREE.Vector3(36, -180, 8),
-    new THREE.Vector3(32, -150, -2),
-    new THREE.Vector3(14, -122, -6),
-    new THREE.Vector3(0, STEM_TOP_Y + 10, 0),
-  ], false, 'catmullrom', 0);
-  const segments = 24;
-  const radial = 4;
-  const geometry = new THREE.TubeGeometry(curve, segments, 2.6, radial, false);
-
-  // Se estrecha hacia arriba: escalamos cada anillo respecto a su centro
-  const pos = geometry.attributes.position;
-  const center = new THREE.Vector3();
-  for (let j = 0; j <= segments; j++) {
-    curve.getPointAt(j / segments, center);
-    const taper = lerp(1.35, 0.7, j / segments);
-    for (let k = 0; k <= radial; k++) {
-      const v = j * (radial + 1) + k;
-      pos.setXYZ(
-        v,
-        center.x + (pos.getX(v) - center.x) * taper,
-        center.y + (pos.getY(v) - center.y) * taper,
-        center.z + (pos.getZ(v) - center.z) * taper,
-      );
-    }
-  }
-  geometry.computeVertexNormals();
-  const material = new THREE.MeshStandardMaterial({
-    color: COLORS.stem.clone(),
-    roughness: 0.9,
-    flatShading: true,
-  });
-  stem = new THREE.Mesh(geometry, material);
-  stem.userData = { segments, indicesPerSegment: radial * 6 };
-  scene.add(stem);
-
-  // Dos hojas plegadas a lo largo del tallo
-  const leafGeometry = createOrigamiLeafGeometry();
-  leaves = [0.4, 0.66].map((t, i) => {
-    const leaf = new THREE.Mesh(leafGeometry, new THREE.MeshStandardMaterial({
-      color: COLORS.stem.clone(),
-      roughness: 0.9,
-      flatShading: true,
-      side: THREE.DoubleSide,
-    }));
-    leaf.position.copy(curve.getPoint(t));
-    leaf.rotation.set(0.25, i === 0 ? 0.5 : -0.5, i === 0 ? -1.0 : 1.0);
-    leaf.userData = { t, size: 24 };
-    scene.add(leaf);
-    return leaf;
-  });
-}
-
-// Pasa un pétalo del cerebro a la lista de pétalos que caen
-function detachPetal(i, scale, color) {
-  if (Math.random() < 0.75 || fallCount >= CONFIG.fallPool) return; // solo cae uno de cada cuatro
-  const slot = fallPool[fallCount++];
-
-  const b = i * 3;
-  const nx = petals.normal[b];
-  const ny = petals.normal[b + 1];
-  const nz = petals.normal[b + 2];
-
-  slot.life = 0;
-  slot.sway = rand(0, Math.PI * 2);
-  slot.pos.set(petals.base[b] + nx, petals.base[b + 1] + ny, petals.base[b + 2] + nz)
-    .applyMatrix4(brain.matrixWorld);
-  slot.vel.set(nx, ny, nz).applyQuaternion(brainWorldQuat).multiplyScalar(rand(15, 40));
-  slot.vel.x += rand(-10, 10);
-  slot.vel.y += rand(0, 20);
-  slot.quat.set(petals.quat[i * 4], petals.quat[i * 4 + 1], petals.quat[i * 4 + 2], petals.quat[i * 4 + 3]);
-  slot.quat.premultiply(brainWorldQuat);
-  slot.axis.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize();
-  slot.spin = rand(1, 2.5);
-  // Vuelo: balanceo lateral, viento y velocidad de caída propios
-  slot.freq = rand(1.6, 2.8);
-  slot.amp = rand(25, 50);
-  slot.wind = rand(-12, 12);
-  slot.fall = rand(30, 55);
-  slot.size = petals.size[i] * scale * BRAIN_SCALE;
-  slot.color.copy(color);
-}
-
-const tmpColor = new THREE.Color();
-
-function updateBrainPetals(dt) {
-  const mat = petalMesh.instanceMatrix.array;
-  const col = petalMesh.instanceColor.array;
-  const { base, normal, rot, size, color, state: st, grow, threshold, sprout } = petals;
-  const decay = state.decay;
-  const petalT = (state.regrow - 0.22) / 0.78;
-
-  for (let i = 0; i < petals.count; i++) {
-    let s = 0;        // escala visible 0..1
-    let wilt = 0;     // marchitez 0..1
-    let green = 0;    // brote verde 0..1
-
-    if (state.phase === 'shatter') {
-      s = 1;   // bajo el cristal roto el cerebro ya está entero y rosa
-    } else if (state.phase === 'regrow') {
-      s = smoothstep(sprout[i], sprout[i] + 0.14, petalT);
-      // El verde tiene que haber desaparecido del todo al terminar el rebrote
-      green = 1 - smoothstep(sprout[i] + 0.04, Math.min(sprout[i] + 0.3, 1), petalT);
-    } else if (state.phase === 'bloom') {
-      const t = threshold[i];
-      // Sin decadencia no hay marchitez, aunque el pétalo sea de los primeros en caer
-      wilt = smoothstep(Math.max(t - 0.22, 0), t, decay);
-
-      if (st[i] !== GONE && decay >= t) {
-        const current = st[i] === REGROWING ? easeOutCubic(Math.min(grow[i], 1)) : 1;
-        tmpColor.setRGB(color[i * 3], color[i * 3 + 1], color[i * 3 + 2]).lerp(COLORS.wilt, 0.9);
-        detachPetal(i, current * 0.6, tmpColor);
-        st[i] = GONE;
-      } else if (st[i] === GONE && decay < t - 0.015) {
-        st[i] = REGROWING;
-        grow[i] = 0;
-      }
-
-      if (st[i] === ATTACHED) {
-        s = 1 - 0.4 * wilt;
-      } else if (st[i] === REGROWING) {
-        grow[i] += dt / 0.45;
-        s = easeOutCubic(Math.min(grow[i], 1)) * (1 - 0.4 * wilt);
-        if (grow[i] >= 1) st[i] = ATTACHED;
-      }
-    }
-
-    // Matriz: rotación fija × escala, desplazada por la normal (se hunde al marchitarse)
-    const sc = Math.max(size[i] * s, 0.0001);
-    const lift = 1 - wilt * 4;
-    const o = i * 16;
-    const r = i * 9;
-    const b = i * 3;
-    mat[o] = rot[r] * sc;          mat[o + 1] = rot[r + 1] * sc;  mat[o + 2] = rot[r + 2] * sc;   mat[o + 3] = 0;
-    mat[o + 4] = rot[r + 3] * sc;  mat[o + 5] = rot[r + 4] * sc;  mat[o + 6] = rot[r + 5] * sc;   mat[o + 7] = 0;
-    mat[o + 8] = rot[r + 6] * sc;  mat[o + 9] = rot[r + 7] * sc;  mat[o + 10] = rot[r + 8] * sc;  mat[o + 11] = 0;
-    mat[o + 12] = base[b] + normal[b] * lift;
-    mat[o + 13] = base[b + 1] + normal[b + 1] * lift;
-    mat[o + 14] = base[b + 2] + normal[b + 2] * lift;
-    mat[o + 15] = 1;
-
-    // Color: rosa → marrón al marchitarse, verde al brotar
-    tmpColor.setRGB(color[b], color[b + 1], color[b + 2]);
-    if (wilt > 0) tmpColor.lerp(COLORS.wilt, wilt);
-    if (green > 0) tmpColor.lerp(COLORS.sprout, green);
-    col[b] = tmpColor.r;
-    col[b + 1] = tmpColor.g;
-    col[b + 2] = tmpColor.b;
-  }
-
-  petalMesh.instanceMatrix.needsUpdate = true;
-  petalMesh.instanceColor.needsUpdate = true;
-}
-
-const tmpMatrix = new THREE.Matrix4();
-const tmpScale = new THREE.Vector3();
-const tmpSpin = new THREE.Quaternion();
-
-// Los pétalos activos ocupan siempre las primeras posiciones del array (0..fallCount-1):
-// así solo se recorren y dibujan los que están cayendo
-function updateFallingPetals(dt) {
-  for (let i = 0; i < fallCount; i++) {
-    const p = fallPool[i];
-    p.life += dt;
-
-    if (p.pos.y < -250 || p.life >= 3.2) {
-      // Intercambia con el último activo y vuelve a procesar esta posición
-      fallPool[i] = fallPool[fallCount - 1];
-      fallPool[fallCount - 1] = p;
-      fallCount--;
-      i--;
-      continue;
-    }
-
-    // Como una hoja: se balancea de lado a lado y cae más despacio en los extremos;
-    // el impulso inicial hacia fuera se va convirtiendo poco a poco en este planeo
-    const swing = Math.sin(p.life * p.freq + p.sway);
-    const k = Math.min(1, dt * 2.5);
-    p.vel.x = lerp(p.vel.x, p.wind + swing * p.amp, k);
-    p.vel.z = lerp(p.vel.z, Math.cos(p.life * p.freq * 0.7 + p.sway) * p.amp * 0.4, k);
-    p.vel.y = lerp(p.vel.y, -p.fall * (1 - 0.75 * Math.abs(swing)), k);
-    p.pos.addScaledVector(p.vel, dt);
-    tmpSpin.setFromAxisAngle(p.axis, p.spin * (0.5 + Math.abs(swing)) * dt);
-    p.quat.multiply(tmpSpin);
-
-    const fade = 1 - smoothstep(2.2, 3.2, p.life);
-    tmpScale.setScalar(Math.max(p.size * fade, 0.0001));
-    tmpMatrix.compose(p.pos, p.quat, tmpScale);
-    fallMesh.setMatrixAt(i, tmpMatrix);
-    tmpColor.copy(p.color).lerp(COLORS.dead, Math.min(p.life / 2, 1) * 0.8);
-    fallMesh.setColorAt(i, tmpColor);
-  }
-
-  if (fallCount > 0 || fallMesh.count > 0) {
-    fallMesh.instanceMatrix.needsUpdate = true;
-    fallMesh.instanceColor.needsUpdate = true;
-  }
-  fallMesh.count = fallCount;
-}
-
-function updateStem() {
-  let growth;
-  let dead;
-
-  if (state.phase === 'bloom') {
-    growth = 1 - smoothstep(0.88, 1, state.decay);
-    dead = smoothstep(0.35, 0.95, state.decay);
-  } else if (state.phase === 'withered') {
-    growth = 0;
-    dead = 1;
-  } else {
-    growth = smoothstep(0, 0.32, state.regrow);
-    dead = 0;
-  }
-
-  const { segments, indicesPerSegment } = stem.userData;
-  stem.geometry.setDrawRange(0, Math.floor(segments * growth) * indicesPerSegment);
-  stem.material.color.copy(COLORS.stem).lerp(COLORS.stemDead, dead);
-
-  leaves.forEach((leaf) => {
-    const g = smoothstep(leaf.userData.t, leaf.userData.t + 0.15, growth);
-    leaf.scale.setScalar(Math.max(leaf.userData.size * g, 0.0001));
-    leaf.material.color.copy(COLORS.stem).lerp(COLORS.stemDead, dead);
-  });
-
-  // El esqueleto se ve más cuanto más desnudo está el cerebro
-  const bare = state.phase === 'withered' ? 1
-    : state.phase === 'regrow' ? 1 - smoothstep(0.3, 1, state.regrow)
-      : smoothstep(0.2, 0.9, state.decay);
-  skeleton.material.opacity = 0.12 + 0.4 * bare;
-}
-
-function updateBrainMotion(dt) {
-  const k = Math.min(1, dt * 3);
-  state.smooth.nx = lerp(state.smooth.nx, state.hovering ? state.pointer.nx : 0, k);
-  state.smooth.ny = lerp(state.smooth.ny, state.hovering ? state.pointer.ny : 0, k);
-
-  const idle = Math.sin(state.time * 0.35) * 0.25;
-  brain.rotation.y = BRAIN_BASE_ROT_Y + idle + state.smooth.nx * 0.7;
-  brain.rotation.x = state.smooth.ny * 0.35;
-
-  // La "cabeza" de la rosa cabecea hacia delante al marchitarse
-  let droop = 0;
-  if (state.phase === 'bloom') droop = smoothstep(0.25, 0.9, state.decay);
-  else if (state.phase === 'withered') droop = 1;
-  else droop = 1 - smoothstep(0.1, 0.5, state.regrow);
-  pivot.rotation.z = -droop * 0.32;
-  pivot.rotation.x = droop * 0.22;
-
-  brain.updateMatrixWorld(true);
-  brain.getWorldQuaternion(brainWorldQuat);
-}
-
-/* ==========================================================
-   5. CICLO: florecer → marchitarse → rebrotar
-   ========================================================== */
-
-function setPhase(phase) {
-  state.phase = phase;
-  state.phaseTime = 0;
-
-  if (phase === 'bloom') {
-    state.decay = 0;
-    state.peakDecay = 0;
-    state.regrow = 0;
-    petals.state.fill(ATTACHED);
-  }
-}
-
-function updateCycle(dt) {
-  state.phaseTime += dt;
-
-  if (state.phase === 'bloom') {
-    if (state.hovering) {
-      state.decay += dt / CONFIG.decayDuration;
-      state.peakDecay = Math.max(state.peakDecay, state.decay);
-    } else {
-      state.decay = Math.max(0, state.decay - CONFIG.recoverSpeed * dt, state.peakDecay - CONFIG.recoverMax);
-    }
-    if (state.decay >= 1) {
-      state.decay = 1;
-      setPhase('withered');
-    }
-  } else if (state.phase === 'withered') {
-    if (CONFIG.returnTransition === 'shatter') {
-      // Tras la pausa aparece el ojo grande; al terminar su mirada se rompe el cristal
-      // (justo después de dibujar este frame, ver animate)
-      const stareTime = state.phaseTime - CONFIG.witherPause;
-      state.stare = stareTime > 0 ? stareTime : 0;
-      if (stareTime >= CONFIG.stareDuration && !state.pendingShatter) state.pendingShatter = true;
-    } else if (state.phaseTime >= CONFIG.witherPause) {
-      setPhase('regrow');
-    }
-  } else if (state.phase === 'shatter') {
-    if (state.phaseTime >= CONFIG.shatterDuration) {
-      setPhase('bloom');
-      clearShards();
-    }
-  } else {
-    state.regrow = Math.min(1, state.phaseTime / CONFIG.regrowDuration);
-    if (state.regrow >= 1) setPhase('bloom');
-  }
-}
-
-/* ==========================================================
-   6. PARALAJE
-   ========================================================== */
-
-function updateParallax() {
-  const { nx, ny } = state.smooth;
-  state.titleOffset.x = -nx * 14;
-  state.titleOffset.y = -ny * 10;
-
-  titleLayer.style.transform = `translate(${state.titleOffset.x.toFixed(2)}px, ${state.titleOffset.y.toFixed(2)}px)`;
-  metaLayer.style.transform = `translate(${(nx * 5).toFixed(2)}px, ${(ny * 4).toFixed(2)}px)`;
-  sceneLayer.style.transform = `translate(${(nx * 10).toFixed(2)}px, ${(ny * 8).toFixed(2)}px)`;
-}
-
-/* ==========================================================
-   6b. FONDO: oscuridad, ojos turbios y temblor
-   ========================================================== */
-
-function setupEyeCanvas() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  [eyeCanvas, stareCanvas].forEach((c) => {
-    c.width = POSTER_W * dpr;
-    c.height = POSTER_H * dpr;
-  });
-  eyeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  stareCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-// Zonas del cartel donde puede aparecer un ojo (rangos de x e y del centro y anchura máxima):
-// alrededor del titular y del cerebro, sin taparlos, repartidas por todo el cartel
-const EYE_ZONES = [
-  { x: [770, 800], y: [170, 250], maxW: 90 },    // arriba a la derecha
-  { x: [770, 800], y: [380, 480], maxW: 90 },    // derecha, junto al titular
-  { x: [60, 100], y: [560, 680], maxW: 100 },    // izquierda del cerebro, arriba
-  { x: [750, 790], y: [600, 740], maxW: 110 },   // derecha del cerebro, arriba
-  { x: [60, 110], y: [800, 920], maxW: 110 },    // izquierda del cerebro, abajo
-  { x: [740, 790], y: [840, 940], maxW: 110 },   // derecha del cerebro, abajo
-  { x: [120, 250], y: [1040, 1140], maxW: 130 }, // abajo a la izquierda
-  { x: [340, 460], y: [1080, 1150], maxW: 120 }, // abajo en el centro
-  { x: [660, 770], y: [1040, 1140], maxW: 130 }, // abajo a la derecha
-];
-
-// Coloca un ojo en cada zona, con posición y tamaño variables dentro de ella
-function createEyes() {
-  EYE_ZONES.forEach((zone) => {
-    const w = rand(60, zone.maxW);
-    const x = rand(zone.x[0], zone.x[1]);
-    const y = rand(zone.y[0], zone.y[1]);
-
-    // Venas: curvas desde el borde hacia el iris (en unidades relativas al ojo)
-    const veins = [];
-    for (let v = 0; v < 5; v++) {
-      const side = Math.random() < 0.5 ? -1 : 1;
-      const x0 = side * rand(0.6, 0.95);
-      const y0 = rand(-0.4, 0.4);
-      veins.push([x0, y0, x0 * 0.7, y0 + rand(-0.5, 0.5), x0 * rand(0.25, 0.45), y0 * 0.3]);
-    }
-
-    eyes.push({
-      x, y, w,
-      h: w * 0.38,
-      lid: rand(0.5, 1),                   // párpado superior caído
-      opacity: rand(0.9, 1),
-      look: { x: 0, y: 0 },
-      shake: { x: 0, y: 0 },
-      twitch: { x: 0, y: 0 },
-      nextTwitch: rand(0.5, 3),
-      blink: 0,
-      nextBlink: rand(1, 5),
-      veins,
-      seed: rand(0, 100),
-    });
-  });
-
-  // Orden de aparición aleatorio (salen en sitios distintos);
-  // el primero no aparece hasta que el fondo está oscuro
-  eyes.sort(() => Math.random() - 0.5);
-  eyes.forEach((eye, i) => {
-    eye.appearAt = 0.3 + (i / eyes.length) * 0.5;
-  });
-}
-
-function updateDarkness() {
-  if (state.phase === 'bloom') state.darkness = smoothstep(0.08, 0.85, state.decay);
-  else if (state.phase === 'withered') state.darkness = 1;
-  else state.darkness = 1 - smoothstep(0.05, 0.6, state.regrow);
-
-  darkLayer.style.opacity = (state.darkness * 0.95).toFixed(3);
-}
-
-// Posición del cerebro en pantalla: hacia ahí miran los ojos
-const tmpVec = new THREE.Vector3();
-function updateBrainScreen() {
-  brain.getWorldPosition(tmpVec).project(camera);
-  state.brainScreen.x = (tmpVec.x + 1) / 2 * POSTER_W;
-  state.brainScreen.y = (1 - tmpVec.y) / 2 * POSTER_H;
-}
-
-// Mirada colectiva: cada pocos segundos todos los ojos miran al cursor (al espectador)
-const glance = { active: 0, next: rand(3, 6) };
-
-// Dibuja la forma del ojo (almendra con el párpado superior caído)
-function eyeShapePath(ctx, w, h, lid) {
-  ctx.beginPath();
-  ctx.moveTo(-w / 2, 0);
-  ctx.quadraticCurveTo(0, -h * 1.35 * lid, w / 2, 0);
-  ctx.quadraticCurveTo(0, h * 1.35, -w / 2, 0);
-  ctx.closePath();
-}
-
-function drawEye(eye, visible, alpha, offsetX, offsetY) {
-  const { w } = eye;
-  const h = eye.h * visible * (1 - eye.blink);   // se abren al aparecer y parpadean
-  if (h < 0.5) return;
-
-  const ctx = eyeCtx;
-  ctx.save();
-  ctx.translate(eye.x + eye.shake.x + eye.twitch.x + offsetX, eye.y + eye.shake.y + eye.twitch.y + offsetY);
-  ctx.globalAlpha = alpha;
-
-  // Blanco del ojo casi negro, enfermo
-  eyeShapePath(ctx, w, h, eye.lid);
-  const sclera = ctx.createRadialGradient(-w * 0.08, 0, 0, 0, 0, w / 2);
-  sclera.addColorStop(0, '#f4f2ee');
-  sclera.addColorStop(0.6, '#c9c5be');
-  sclera.addColorStop(1, '#1a1817');
-  ctx.fillStyle = sclera;
-  ctx.fill();
-  ctx.clip();
-
-  // Venas rojo oscuro
-  ctx.strokeStyle = 'rgba(130, 18, 24, 0.75)';
-  ctx.lineWidth = 0.9;
-  eye.veins.forEach(([x0, y0, cx, cy, x1, y1]) => {
-    ctx.beginPath();
-    ctx.moveTo(x0 * w / 2, y0 * h);
-    ctx.quadraticCurveTo(cx * w / 2, cy * h, x1 * w / 2, y1 * h);
-    ctx.stroke();
-  });
-
-  // Iris negro con la pupila dilatada que late
-  const pulse = 1 + Math.sin(state.time * 3 + eye.seed) * 0.06;
-  const r = eye.h * 1.25 * pulse;   // más grande porque su borde se funde con el blanco
-  const ix = eye.look.x * (w / 2 - r * 0.5);
-  const iy = eye.look.y * eye.h * 0.45;
-  ctx.globalAlpha = Math.min(1, alpha * 1.5);   // el iris tapa siempre el eco que hay detrás
-  const iris = ctx.createRadialGradient(ix, iy, 0, ix, iy, r);
-  // Pupila negra y borde difuminado que se funde con el blanco
-  iris.addColorStop(0, '#000');
-  iris.addColorStop(0.5, '#000');
-  iris.addColorStop(0.72, 'rgba(8, 8, 8, 0.92)');
-  iris.addColorStop(0.88, 'rgba(30, 28, 28, 0.45)');
-  iris.addColorStop(1, 'rgba(60, 58, 56, 0)');
-  ctx.fillStyle = iris;
-  ctx.beginPath();
-  ctx.arc(ix, iy, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Brillos tenues
-  ctx.fillStyle = 'rgba(235, 230, 230, 0.7)';
-  ctx.beginPath();
-  ctx.arc(ix - r * 0.28, iy - r * 0.32, r * 0.07, 0, Math.PI * 2);
-  ctx.arc(ix + r * 0.1, iy - r * 0.36, r * 0.045, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Sombra del párpado
-  ctx.globalAlpha = alpha * 0.35;
-  const shade = ctx.createLinearGradient(0, -h * 1.35 * eye.lid, 0, h * 0.2);
-  shade.addColorStop(0, 'rgba(0, 0, 0, 0.95)');
-  shade.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = shade;
-  ctx.fillRect(-w / 2, -h * 1.4, w, h * 1.6);
-
-  ctx.restore();
-}
-
-function updateGlance(dt) {
-  glance.next -= dt;
-  if (glance.next <= 0 && state.hovering && state.darkness > 0.3) {
-    glance.active = rand(0.6, 1.1);
-    glance.next = rand(3.5, 7);
-  }
-  glance.active = Math.max(0, glance.active - dt);
-}
-
-function updateEyes(dt) {
-  eyeCtx.clearRect(0, 0, POSTER_W, POSTER_H);
-  updateGlance(dt);
-  if (state.darkness <= 0) return;
-
-  const tremor = 0.8 + state.darkness * 2.2;
-  const flicker = state.darkness > 0.6;
-
-  eyes.forEach((eye) => {
-    const visible = smoothstep(eye.appearAt, eye.appearAt + 0.2, state.darkness);
-    if (visible <= 0) return;
-
-    // Parpadeo ocasional
-    eye.nextBlink -= dt;
-    if (eye.nextBlink <= 0) {
-      eye.blinkTime = 0;
-      eye.nextBlink = rand(2.5, 7);
-    }
-    if (eye.blinkTime !== undefined) {
-      eye.blinkTime += dt;
-      eye.blink = Math.sin(Math.PI * clamp(eye.blinkTime / 0.22, 0, 1));
-      if (eye.blinkTime >= 0.22) eye.blinkTime = undefined;
-    }
-
-    // Temblor propio + tirones bruscos que se recuperan rápido
-    eye.shake.x = (Math.random() - 0.5) * tremor;
-    eye.shake.y = (Math.random() - 0.5) * tremor;
-    eye.nextTwitch -= dt;
-    if (eye.nextTwitch <= 0) {
-      eye.twitch.x = rand(-10, 10);
-      eye.twitch.y = rand(-5, 5);
-      eye.nextTwitch = rand(1, 4);
-    }
-    eye.twitch.x *= 1 - Math.min(1, dt * 12);
-    eye.twitch.y *= 1 - Math.min(1, dt * 12);
-
-    // Mirada: al cerebro, todos a la vez al cursor durante la mirada colectiva,
-    // o al frente mientras mira el ojo grande
-    let target = glance.active > 0 ? state.pointer : state.brainScreen;
-    if (state.stare > 0) target = eye;
-    const dx = target.x - eye.x;
-    const dy = target.y - eye.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const saccade = (Math.random() - 0.5) * 0.12;
-    const k = glance.active > 0 ? 1 : Math.min(1, dt * 6);
-    eye.look.x = lerp(eye.look.x, clamp(dx / len + saccade, -1, 1), k);
-    eye.look.y = lerp(eye.look.y, clamp(dy / len + saccade, -1, 1), k);
-
-    // Luz que falla: el ojo se apaga del todo un instante (nunca queda a medias)
-    if (flicker && Math.random() < 0.03) return;
-    const alpha = eye.opacity * visible;
-
-    // Eco fantasma desplazado (visión doble) y después el ojo
-    const echo = 3 + Math.sin(state.time * 9 + eye.seed) * 3;
-    drawEye(eye, visible, alpha * 0.3, echo, -echo * 0.4);
-    drawEye(eye, visible, alpha, 0, 0);
-  });
-}
-
-// Ojo grande (recreación del ojo de referencia) donde estaba el cerebro, mirando al frente
-const STARE_EYE_W = 400;
-// El ojo se pinta primero en un lienzo aparte y luego se recorta con una máscara
-// irregular: así el blanco se funde con el negro de forma desigual, como en la referencia
-const stareBuffer = document.createElement('canvas');
-const stareBufCtx = stareBuffer.getContext('2d');
-const stareMask = document.createElement('canvas');
-const stareMaskCtx = stareMask.getContext('2d');
-
-// Capas de la máscara: almendras algo desplazadas y con distinto desenfoque.
-// Sumadas, el centro queda opaco y el borde se desvanece de forma desigual
-// (más extendido abajo a la izquierda, más corto arriba a la derecha).
-const STARE_MASK_LAYERS = [
-  { sw: 1.0, sh: 1.0, dx: 0, dy: 0, blur: 6, alpha: 0.7 },
-  { sw: 0.9, sh: 0.82, dx: -12, dy: 6, blur: 14, alpha: 0.5 },
-  { sw: 1.05, sh: 0.92, dx: -18, dy: 10, blur: 24, alpha: 0.35 },
-  { sw: 0.78, sh: 0.7, dx: -6, dy: 2, blur: 10, alpha: 0.6 },
-  { sw: 0.96, sh: 1.08, dx: 10, dy: -4, blur: 20, alpha: 0.25 },
-];
-
-// "Mordiscos" de sombra a lo largo del contorno (más en el párpado superior)
-const STARE_BITES = Array.from({ length: 10 }, (_, i) => ({
-  t: rand(0.12, 0.92),               // posición a lo largo del párpado
-  top: i < 7,
-  r: i < 7 ? rand(12, 26) : rand(8, 16),
-  alpha: i < 7 ? rand(0.25, 0.5) : rand(0.15, 0.3),
-  inset: rand(0.9, 1.05),            // cuánto se mete hacia dentro del ojo
-}));
-
-// Desplazamiento horizontal de la mirada: centrada mientras se abre y después
-// alterna izquierda / derecha cada 0,55 s con un salto rápido, como quien mira
-// primero un ojo y luego el otro de la persona que tiene delante
-function stareGazeX(w) {
-  const hold = 0.55;
-  const t = state.stare - 0.5;
-  if (t <= 0) return 0;
-  const step = Math.floor(t / hold);
-  const side = (n) => (n < 0 ? 0 : (n % 2 === 0 ? -1 : 1)) * w * 0.035;
-  const jump = smoothstep(0, 0.09, (t % hold) / hold);
-  return lerp(side(step - 1), side(step), jump);
-}
-
-function buildStareMask(x, y, w, h, open, dpr) {
-  if (stareMask.width !== stareBuffer.width) {
-    stareMask.width = stareBuffer.width;
-    stareMask.height = stareBuffer.height;
-  }
-  const m = stareMaskCtx;
-  m.setTransform(dpr, 0, 0, dpr, 0, 0);
-  m.globalCompositeOperation = 'source-over';
-  m.globalAlpha = 1;
-  m.filter = 'none';
-  m.clearRect(0, 0, POSTER_W, POSTER_H);
-  m.save();
-  m.translate(x, y);
-  m.fillStyle = '#000';
-
-  STARE_MASK_LAYERS.forEach((l) => {
-    m.filter = `blur(${l.blur}px)`;
-    m.globalAlpha = l.alpha;
-    m.save();
-    m.translate(l.dx, l.dy * open);
-    eyeAlmondPath(m, w * l.sw, h * l.sh);
-    m.fill();
-    m.restore();
-  });
-
-  // Mordiscos: la oscuridad se come trozos del contorno
-  m.globalCompositeOperation = 'destination-out';
-  m.filter = 'blur(8px)';
-  STARE_BITES.forEach((b) => {
-    // Punto sobre la curva del párpado (bezier cuadrática simétrica)
-    const bx = -w / 2 + b.t * w;
-    const by = (b.top ? -1 : 1) * 2 * b.t * (1 - b.t) * h * b.inset;
-    m.globalAlpha = b.alpha;
-    m.beginPath();
-    m.arc(bx, by, b.r * (0.6 + 0.4 * open), 0, Math.PI * 2);
-    m.fill();
-  });
-  m.restore();
-}
-
-function eyeAlmondPath(ctx, w, h) {
-  ctx.beginPath();
-  ctx.moveTo(-w / 2, 0);
-  ctx.quadraticCurveTo(0, -h, w / 2, 0);
-  ctx.quadraticCurveTo(0, h, -w / 2, 0);
-  ctx.closePath();
-}
-
-function drawStareEye(open, alpha) {
-  const w = STARE_EYE_W;
-  const h = w * 0.45 * open;   // alto del ojo abierto
-  if (h < 1) return;
-
-  if (stareBuffer.width !== stareCanvas.width) {
-    stareBuffer.width = stareCanvas.width;
-    stareBuffer.height = stareCanvas.height;
-  }
-  const dpr = stareBuffer.width / POSTER_W;
-  const ctx = stareBufCtx;
-
-  // Pequeño temblor y respiración de la pupila
-  const t = state.time;
-  const x = state.brainScreen.x + state.smooth.nx * 10 + Math.sin(t * 41) * 0.6;
-  const y = state.brainScreen.y + state.smooth.ny * 8 + Math.sin(t * 37 + 1) * 0.6;
-  const pupil = 1 + Math.sin(t * 2.2) * 0.03;
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.clearRect(0, 0, POSTER_W, POSTER_H);
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.filter = 'blur(1.5px)';   // aspecto turbio de la referencia
-
-  // Blanco gris claro, más luminoso a la izquierda y apagado en las comisuras
-  const sclera = ctx.createRadialGradient(-w * 0.14, -h * 0.05, 0, 0, 0, w * 0.55);
-  sclera.addColorStop(0, '#e2dfdf');
-  sclera.addColorStop(0.5, '#b4b0b0');
-  sclera.addColorStop(0.85, '#5a5757');
-  sclera.addColorStop(1, '#141313');
-  ctx.fillStyle = sclera;
-  ctx.fillRect(-w * 0.55, -h - 20, w * 1.1, h * 2 + 40);
-
-  // Sombra del párpado superior (más marcada a la derecha) y luz abajo a la izquierda
-  const lid = ctx.createRadialGradient(w * 0.12, -h * 0.75, 0, w * 0.12, -h * 0.75, w * 0.34);
-  lid.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
-  lid.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = lid;
-  ctx.fillRect(-w * 0.55, -h - 20, w * 1.1, h * 2 + 40);
-  const glow = ctx.createRadialGradient(-w * 0.26, h * 0.3, 0, -w * 0.26, h * 0.3, w * 0.22);
-  glow.addColorStop(0, 'rgba(255, 255, 255, 0.18)');
-  glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(-w * 0.55, -h - 20, w * 1.1, h * 2 + 40);
-
-  // Iris grande: núcleo negro y anillo gris oscuro que se funde con el blanco.
-  // Mira alternando entre los dos ojos de quien lo ve (salto rápido y pausa)
-  // y la pupila tiembla un poco.
-  const r = w * 0.24 * pupil;
-  const tremorX = (Math.random() - 0.5) * 1.8;
-  const tremorY = (Math.random() - 0.5) * 1.4;
-  const ix = w * 0.02 + stareGazeX(w) + tremorX;
-  const iy = tremorY;
-  const iris = ctx.createRadialGradient(ix, iy, 0, ix, iy, r);
-  iris.addColorStop(0, '#000');
-  iris.addColorStop(0.7, '#020202');
-  iris.addColorStop(0.86, '#2e2d2d');
-  iris.addColorStop(0.95, 'rgba(70, 68, 68, 0.6)');
-  iris.addColorStop(1, 'rgba(90, 88, 88, 0)');
-  ctx.fillStyle = iris;
-  ctx.beginPath();
-  ctx.arc(ix, iy, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Dos brillos juntos en la parte alta de la pupila
-  ctx.filter = 'blur(1px)';
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-  ctx.beginPath();
-  ctx.arc(ix - r * 0.16, iy - r * 0.36, r * 0.055, 0, Math.PI * 2);
-  ctx.arc(ix + r * 0.14, iy - r * 0.36, r * 0.05, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Chispa de luz en el lagrimal derecho
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-  ctx.beginPath();
-  ctx.arc(w * 0.4, h * 0.04, w * 0.012, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
-
-  // Máscara irregular: solo queda lo que cae dentro de ella
-  buildStareMask(x, y, w, h, open, dpr);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalCompositeOperation = 'destination-in';
-  ctx.filter = 'none';
-  ctx.drawImage(stareMask, 0, 0);
-  ctx.globalCompositeOperation = 'source-over';
-
-  stareCtx.globalAlpha = alpha;
-  stareCtx.drawImage(stareBuffer, 0, 0, POSTER_W, POSTER_H);
-  stareCtx.globalAlpha = 1;
-}
-
-let stareDrawn = false;
-
-function updateStare() {
-  if (state.stare <= 0) {
-    if (stareDrawn) {
-      stareCtx.clearRect(0, 0, POSTER_W, POSTER_H);
-      stareDrawn = false;
-    }
-    return;
-  }
-  // Se abre en medio segundo y se queda fijo mirando al frente
-  const open = easeOutCubic(smoothstep(0, 0.55, state.stare));
-  const alpha = smoothstep(0, 0.3, state.stare);
-  stareCtx.clearRect(0, 0, POSTER_W, POSTER_H);
-  drawStareEye(open, alpha);
-  stareDrawn = true;
-}
-
-// Temblor leve del cartel, más intenso cuanto más oscuro (y un golpe fuerte al romperse)
-function updateShake(dt) {
-  state.jolt *= 1 - Math.min(1, dt * 5);
-  const amount = smoothstep(0.35, 1, state.darkness) * 2.5 + state.jolt * 14;
-  const t = state.time;
-  const dx = (Math.sin(t * 47.3) + Math.sin(t * 31.7 + 1.3)) * 0.5 * amount;
-  const dy = (Math.sin(t * 39.1 + 0.7) + Math.sin(t * 53.9)) * 0.5 * amount;
-  poster.style.transform = `scale(${state.scale}) translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
-}
-
-/* ==========================================================
-   6c. VUELTA AL INICIO: la pantalla se rompe como un cristal
-   Se congela una imagen del cartel marchito, se parte en cristales
-   desde el punto de impacto y, mientras caen, debajo todo ya ha vuelto
-   a la normalidad. Los cristales se dibujan en la GPU con un shader de
-   "liquid glass" adaptado de liquidGL (MIT © NaughtyDuk,
-   https://github.com/naughtyduk/liquidGL): bisel, refracción,
-   aberración cromática y brillo especular.
-   ========================================================== */
-
-const snapshot = document.createElement('canvas');
-const snapCtx = snapshot.getContext('2d');
-const shards = [];
-const impact = { x: 0, y: 0 };
-let shatterRenderer, shatterScene, shatterCamera, snapTexture, glassMaterial;
-
-const GLASS_VERTEX = `
-  attribute vec2 aOrig;
-  attribute vec2 aDir;
-  attribute float aInner;
-  varying vec2 vOrig;
-  varying vec2 vDir;
-  varying float vInner;
-  void main() {
-    vOrig = aOrig;
-    vDir = aDir;
-    vInner = aInner;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-const GLASS_FRAGMENT = `
-  uniform sampler2D uSnap;
-  uniform vec2 uSize;
-  uniform float uCrack;
-  uniform float uFlash;
-  uniform vec2 uImpact;
-  varying vec2 vOrig;
-  varying vec2 vDir;
-  varying float vInner;
-
-  void main() {
-    // Bisel: 1 en el borde del cristal y 0 hacia el centro (edgeFactor de liquidGL)
-    float edge = 1.0 - smoothstep(0.0, 0.32, vInner);
-    vec2 dir = normalize(vDir + vec2(0.0001));
-
-    // Refracción suave en todo el trozo y fuerte en el bisel (edge * refraction + edge^n * bevelDepth)
-    float amount = (edge * 0.005 + pow(edge, 6.0) * 0.025) * uCrack;
-    vec2 offset = vec2(dir.x, -dir.y) * amount;
-    vec2 uv = vec2(vOrig.x / uSize.x, 1.0 - vOrig.y / uSize.y) - offset;
-
-    // Aberración cromática: rojo y azul se separan a ambos lados del vector de refracción
-    vec2 chroma = offset * 0.8 * uCrack;
-    vec3 col;
-    col.r = texture2D(uSnap, uv - chroma).r;
-    col.g = texture2D(uSnap, uv).g;
-    col.b = texture2D(uSnap, uv + chroma).b;
-
-    // Brillo especular: borde iluminado desde arriba a la izquierda y una franja diagonal
-    float light = max(dot(dir, normalize(vec2(-0.6, -0.8))), 0.0);
-    float rim = pow(edge, 10.0) * (0.15 + 0.5 * light);
-    float sheen = 0.06 * smoothstep(0.12, 0.0, abs(fract((vOrig.x + vOrig.y) * 0.0016) - 0.5));
-    col += (rim + sheen + pow(edge, 4.0) * 0.025) * uCrack;
-
-    // Destello en el punto de impacto
-    col += uFlash * exp(-length(vOrig - uImpact) / 90.0);
-
-    gl_FragColor = vec4(col, 1.0);
-  }
-`;
-
-function setupShatterCanvas() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  snapshot.width = POSTER_W * dpr;
-  snapshot.height = POSTER_H * dpr;
-
-  shatterRenderer = new THREE.WebGLRenderer({ canvas: shatterCanvas, antialias: true, alpha: true });
-  shatterRenderer.setPixelRatio(dpr);
-  shatterRenderer.setSize(POSTER_W, POSTER_H, false);
-  shatterRenderer.setClearColor(0x000000, 0);
-
-  shatterScene = new THREE.Scene();
-  // Cámara ortográfica en píxeles del cartel (y hacia abajo = negativa)
-  shatterCamera = new THREE.OrthographicCamera(0, POSTER_W, 0, -POSTER_H, -10, 10);
-
-  snapTexture = new THREE.CanvasTexture(snapshot);
-  snapTexture.minFilter = THREE.LinearFilter;
-  snapTexture.generateMipmaps = false;
-
-  glassMaterial = new THREE.ShaderMaterial({
-    vertexShader: GLASS_VERTEX,
-    fragmentShader: GLASS_FRAGMENT,
-    uniforms: {
-      uSnap: { value: snapTexture },
-      uSize: { value: new THREE.Vector2(POSTER_W, POSTER_H) },
-      uCrack: { value: 0 },
-      uFlash: { value: 0 },
-      uImpact: { value: new THREE.Vector2() },
-    },
-    side: THREE.DoubleSide,
-  });
-}
-
-// Dibuja en un canvas lo que se ve ahora mismo (fondo, ojos, cerebro, titular y pétalos)
-function buildSnapshot() {
-  const dpr = snapshot.width / POSTER_W;
-  const ctx = snapCtx;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#040203';
-  ctx.fillRect(0, 0, POSTER_W, POSTER_H);
-
-  ctx.filter = 'blur(0.6px)';
-  ctx.drawImage(eyeCanvas, 0, 0, POSTER_W, POSTER_H);
-  ctx.filter = 'none';
-
-  // El canvas WebGL se copia justo después de renderizar
-  renderer.render(scene, camera);
-  ctx.drawImage(brainCanvas, state.smooth.nx * 10, state.smooth.ny * 8, POSTER_W, POSTER_H);
-  ctx.drawImage(stareCanvas, 0, 0, POSTER_W, POSTER_H);
-
-  // Las letras del titular, tal y como están (finas, caídas e inclinadas)
-  const posterRect = poster.getBoundingClientRect();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  letters.forEach((letter) => {
-    const r = letter.glyph.getBoundingClientRect();
-    const v = letter.value;
-    ctx.save();
-    ctx.translate(
-      (r.left - posterRect.left + r.width / 2) / state.scale,
-      (r.top - posterRect.top + r.height / 2) / state.scale,
-    );
-    ctx.rotate((v * letter.tilt * Math.PI) / 180);
-    ctx.font = `${Math.round(900 - 800 * v)} 122px Archivo, sans-serif`;
-    ctx.fontStretch = v > 0.5 ? 'semi-condensed' : 'normal';
-    ctx.globalAlpha = parseFloat(letter.glyph.style.opacity || '1');
-    ctx.fillStyle = letter.glyph.style.color || '#ff5c8f';
-    ctx.fillText(letter.glyph.textContent, 0, 0);
-    ctx.restore();
-  });
-
-  ctx.drawImage(petalCanvas, 0, 0, POSTER_W, POSTER_H);
-  drawHeaderSnapshot(ctx, posterRect);
-  snapTexture.needsUpdate = true;
-}
-
-// La cabecera (tema, fecha y línea) también forma parte del cristal que se rompe
-function drawHeaderSnapshot(ctx, posterRect) {
-  const toPoster = (r) => ({
-    left: (r.left - posterRect.left) / state.scale,
-    right: (r.right - posterRect.left) / state.scale,
-    top: (r.top - posterRect.top) / state.scale,
-    bottom: (r.bottom - posterRect.top) / state.scale,
-  });
-  const header = document.querySelector('.meta-top');
-  const topic = document.querySelector('.topic');
-  const date = document.querySelector('.date');
-  const ink = getComputedStyle(topic).color;
-  const rose = getComputedStyle(document.querySelector('.date__day')).color;
-
-  ctx.save();
-  ctx.globalAlpha = 1;
-  ctx.font = '600 15px "Inter Tight", system-ui, sans-serif';
-  ctx.letterSpacing = '2.7px';   // 0.18em
-  ctx.textBaseline = 'middle';
-  const lineHeight = 15 * 1.3;
-
-  const t = toPoster(topic.getBoundingClientRect());
-  ctx.textAlign = 'left';
-  ctx.fillStyle = ink;
-  ['ENFERMEDADES', 'NEURODEGENERATIVAS'].forEach((line, i) => {
-    ctx.fillText(line, t.left, t.top + lineHeight * (i + 0.5));
-  });
-
-  const d = toPoster(date.getBoundingClientRect());
-  ctx.textAlign = 'right';
-  ctx.fillStyle = rose;
-  ctx.fillText('21', d.right + 2.7, d.top + lineHeight * 0.5);
-  ctx.fillStyle = ink;
-  ctx.fillText('DE DICIEMBRE', d.right + 2.7, d.top + lineHeight * 1.5);
-
-  const hd = toPoster(header.getBoundingClientRect());
-  ctx.fillStyle = 'rgba(246, 223, 230, 0.22)';
-  ctx.fillRect(hd.left, hd.bottom - 1, hd.right - hd.left, 1);
-  ctx.restore();
-}
-
-// Geometría de un cristal: abanico de triángulos desde su centro.
-// aInner = 1 en el centro y 0 en el borde (para el bisel); aDir apunta hacia el borde.
-function createShardGeometry(points, cx, cy) {
-  const positions = [];
-  const orig = [];
-  const dirs = [];
-  const inner = [];
-  const pushVertex = (x, y, isCentre) => {
-    positions.push(x - cx, -(y - cy), 0);
-    orig.push(x, y);
-    dirs.push(x - cx, y - cy);
-    inner.push(isCentre ? 1 : 0);
-  };
-  points.forEach((p, i) => {
-    const q = points[(i + 1) % points.length];
-    pushVertex(cx, cy, true);
-    pushVertex(p[0], p[1], false);
-    pushVertex(q[0], q[1], false);
-  });
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('aOrig', new THREE.Float32BufferAttribute(orig, 2));
-  geometry.setAttribute('aDir', new THREE.Float32BufferAttribute(dirs, 2));
-  geometry.setAttribute('aInner', new THREE.Float32BufferAttribute(inner, 1));
-  return geometry;
-}
-
-function addShard(points) {
-  const cx = points.reduce((sum, p) => sum + p[0], 0) / points.length;
-  const cy = points.reduce((sum, p) => sum + p[1], 0) / points.length;
-  const xs = points.map((p) => p[0]);
-  const ys = points.map((p) => p[1]);
-  const outside = Math.max(...xs) < 0 || Math.min(...xs) > POSTER_W
-    || Math.max(...ys) < 0 || Math.min(...ys) > POSTER_H;
-  if (outside) return;
-
-  const dx = cx - impact.x;
-  const dy = cy - impact.y;
-  const dist = Math.hypot(dx, dy) || 1;
-  const mesh = new THREE.Mesh(createShardGeometry(points, cx, cy), glassMaterial);
-  mesh.frustumCulled = false;
-  shatterScene.add(mesh);
-
-  shards.push({
-    mesh,
-    cx, cy,
-    dirX: dx / dist,
-    dirY: dy / dist,
-    x: 0, y: 0, rot: 0,
-    vx: (dx / dist) * rand(30, 150),
-    vy: rand(-140, -20),
-    vrot: rand(-2.5, 2.5),
-    delay: 0.25 + (dist / 900) * 0.35 + rand(0, 0.12),  // cerca del impacto caen antes
-  });
-}
-
-function clearShards() {
-  shards.forEach((s) => {
-    shatterScene.remove(s.mesh);
-    s.mesh.geometry.dispose();
-  });
-  shards.length = 0;
-  shatterRenderer.render(shatterScene, shatterCamera);   // deja el canvas vacío
-}
-
-// Grietas radiales desde el impacto + anillos irregulares → unos 100 trozos de cristal
-function createShards() {
-  clearShards();
-  const rays = 12;
-  const rings = [0, 40, 110, 210, 340, 520, 760, 1100, 1700];
-  const angles = [];
-  for (let j = 0; j < rays; j++) angles.push((j / rays) * Math.PI * 2 + rand(-0.2, 0.2));
-  const jitter = rings.map((r, k) => angles.map(() => (k === rings.length - 1 ? 1 : rand(0.82, 1.18))));
-
-  const point = (k, j) => {
-    const a = angles[j % rays];
-    const r = rings[k] * jitter[k][j % rays];
-    return [impact.x + Math.cos(a) * r, impact.y + Math.sin(a) * r];
-  };
-
-  for (let k = 0; k < rings.length - 1; k++) {
-    for (let j = 0; j < rays; j++) {
-      if (k === 0) {
-        addShard([point(0, j), point(1, j), point(1, j + 1)]);
-      } else if (Math.random() < 0.35) {
-        // A veces el trozo se parte en dos triángulos
-        addShard([point(k, j), point(k + 1, j), point(k + 1, j + 1)]);
-        addShard([point(k, j), point(k + 1, j + 1), point(k, j + 1)]);
-      } else {
-        addShard([point(k, j), point(k + 1, j), point(k + 1, j + 1), point(k, j + 1)]);
-      }
-    }
-  }
-}
-
-function startShatter() {
-  // El cristal se rompe desde el ojo grande
-  impact.x = state.brainScreen.x + state.smooth.nx * 10;
-  impact.y = state.brainScreen.y + state.smooth.ny * 8;
-  buildSnapshot();
-  state.stare = 0;
-  updateStare();
-  createShards();
-  glassMaterial.uniforms.uImpact.value.set(impact.x, impact.y);
-  state.jolt = 1;
-
-  // Debajo del cristal todo vuelve a la normalidad al instante
-  state.phase = 'shatter';
-  state.phaseTime = 0;
-  state.decay = 0;
-  state.peakDecay = 0;
-  state.regrow = 1;
-  petals.state.fill(ATTACHED);
-  fallCount = 0;
-  fallMesh.count = 0;
-  flatPetals.length = 0;
-  letters.forEach((letter) => {
-    letter.value = 0;
-    letter.lastValue = -1;
-    letter.shed = 0;
-    letter.absorb = 0;
-  });
-}
-
-function updateShatter(dt) {
-  if (state.phase !== 'shatter') return;
-
-  const t = state.phaseTime;
-  const crack = smoothstep(0, 0.2, t);   // las grietas aparecen antes de caer
-  glassMaterial.uniforms.uCrack.value = crack;
-  glassMaterial.uniforms.uFlash.value = 0.8 * Math.max(0, 1 - t / 0.4);
-
-  shards.forEach((s) => {
-    if (t > s.delay) {
-      s.vy += 1600 * dt;
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      s.rot += s.vrot * dt;
-    }
-    s.mesh.visible = s.cy + s.y < POSTER_H + 300;
-
-    // Al agrietarse, los trozos se separan un par de píxeles del impacto
-    const gap = crack * 2;
-    s.mesh.position.set(s.cx + s.x + s.dirX * gap, -(s.cy + s.y + s.dirY * gap), 0);
-    s.mesh.rotation.z = -s.rot;
-  });
-
-  shatterRenderer.render(shatterScene, shatterCamera);
-}
-
-/* ==========================================================
-   7. MANEJADORES DE EVENTOS
-   ========================================================== */
-
-// mouseenter: el cursor entra en el cartel → empieza a marchitarse
-function handlePosterEnter(event) {
-  state.hovering = true;
-  updatePointer(event);
-}
-
-// mouseleave: el cursor sale → se pausa la decadencia y todo vuelve a su sitio
 function handlePosterLeave() {
-  state.hovering = false;
+  state.hover = false;
+  state.mouse.x = 0;
+  state.mouse.y = 0;
 }
 
-// mousemove: guarda la posición del cursor para rotación, paralaje y letras
 function handlePosterMove(event) {
-  updatePointer(event);
-}
-
-function updatePointer(event) {
   const p = toPosterCoords(event.clientX, event.clientY);
-  state.pointer.x = p.x;
-  state.pointer.y = p.y;
-  state.pointer.nx = clamp((p.x / POSTER_W) * 2 - 1, -1, 1);
-  state.pointer.ny = clamp((p.y / POSTER_H) * 2 - 1, -1, 1);
+  state.mouse.x = clamp(p.x / POSTER_W, 0, 1) * 2 - 1;
+  state.mouse.y = clamp(p.y / POSTER_H, 0, 1) * 2 - 1;
 }
 
-// mouseenter en una letra: se hincha, brilla y suelta una ráfaga de pétalos
+/* Letras del titular: cada letra va en su propio <span> para que reaccione por separado */
+const LETTER_COLORS = [COLORS.gold, COLORS.red, '#1fa8ff', '#3ee07a', '#ff7ab6', '#f7efe0'];
+
+function splitTitleIntoLetters() {
+  titleEl.setAttribute('aria-label', titleEl.textContent.replace(/\s+/g, ' ').trim());
+  for (const line of titleEl.querySelectorAll('.title__line')) {
+    const text = line.textContent;
+    line.textContent = '';
+    line.setAttribute('aria-hidden', 'true');
+    for (const ch of text) {
+      const span = document.createElement('span');
+      if (ch === ' ') {
+        span.className = 'char char--space';
+      } else {
+        span.className = 'char';
+        span.textContent = ch;
+        span.addEventListener('mouseenter', handleLetterEnter);
+        span.addEventListener('mouseleave', handleLetterLeave);
+      }
+      line.appendChild(span);
+    }
+  }
+}
+
+/* Al pasar por encima, la letra salta, se ladea y cambia de color (distinto al de su línea) */
 function handleLetterEnter(event) {
-  const letter = letterByEl.get(event.currentTarget);
-  letter.el.style.transform = `translateY(-10px) scale(1.16) rotate(${rand(-7, 7).toFixed(1)}deg)`;
-  letter.el.style.filter = 'drop-shadow(0 0 18px rgba(255, 92, 143, 0.7)) brightness(1.25)';
-  burstLetter(letter, 12);
-  if (state.phase === 'bloom') letter.value = Math.min(1, letter.value + 0.08);
+  const el = event.currentTarget;
+  const own = getComputedStyle(el.parentElement).color;
+  let color;
+  do {
+    color = LETTER_COLORS[Math.floor(Math.random() * LETTER_COLORS.length)];
+  } while (new THREE.Color(color).getStyle() === own.replace(/\s/g, ''));
+  const tilt = rand(-14, 14).toFixed(1);
+  el.style.transform = `translateY(-0.16em) rotate(${tilt}deg) scale(1.12)`;
+  el.style.color = color;
 }
 
-// mouseleave en una letra: recupera su apariencia inicial
+/* Al salir, vuelve a su sitio con un rebote (transición en CSS) y recupera su color */
 function handleLetterLeave(event) {
-  const letter = letterByEl.get(event.currentTarget);
-  letter.el.style.transform = '';
-  letter.el.style.filter = '';
+  const el = event.currentTarget;
+  el.style.transform = '';
+  el.style.color = '';
 }
 
-/* ==========================================================
-   8. BUCLE DE ANIMACIÓN E INICIO
-   ========================================================== */
+/* Pedales de turbo: con el ratón encima se pisa el pedal (la placa 3D gira hacia el suelo
+   en updatePedals) y el coche de ese color acelera; su cartela se ilumina con ese color */
+function handleBoostEnter(event) {
+  const zone = event.currentTarget;
+  const car = cars.find((c) => c.boostZone === zone.id);
+  if (car) car.boost = true;
+  const color = getComputedStyle(zone).getPropertyValue('--boost-color').trim();
+  zone.classList.add('is-active');
+  // La cartela 3D brilla con el color del coche
+  zone.querySelector('.pedal').style.filter = `drop-shadow(0 0 8px ${color}88) drop-shadow(0 0 18px ${color}55)`;
+}
+
+function handleBoostLeave(event) {
+  const zone = event.currentTarget;
+  const car = cars.find((c) => c.boostZone === zone.id);
+  if (car) car.boost = false;
+  zone.classList.remove('is-active');
+  zone.querySelector('.pedal').style.filter = '';
+}
+
+/* Mensaje de sensibilización: al pasar el ratón crece y la frase se vuelve dorada */
+function handleMessageEnter() {
+  messageEl.style.transform = 'scale(1.08)';
+  messageClaimEl.style.color = COLORS.gold;
+}
+
+function handleMessageLeave() {
+  messageEl.style.transform = '';
+  messageClaimEl.style.color = '';
+}
+
+/* Logos de las entidades: en reposo en blanco; al pasar el ratón recuperan su color
+   (y los oscuros aparecen sobre una placa clara, data-chip) */
+function handlePartnerEnter(event) {
+  const el = event.currentTarget;
+  el.style.filter = 'none';
+  el.style.backgroundColor = el.dataset.chip || '';
+  el.style.opacity = '1';
+  el.style.transform = 'scale(1.15)';
+}
+
+function handlePartnerLeave(event) {
+  const el = event.currentTarget;
+  el.style.filter = '';
+  el.style.backgroundColor = '';
+  el.style.opacity = '';
+  el.style.transform = '';
+}
+
+/* Cada coche que entra en la caja es un regalo entregado: sube el contador con un salto */
+let giftPopTimer = 0;
+function deliverGift() {
+  state.gifts += 1;
+  giftCountEl.textContent = String(state.gifts);
+  giftCountEl.style.transform = 'scale(1.5)';
+  clearTimeout(giftPopTimer);
+  giftPopTimer = setTimeout(() => {
+    giftCountEl.style.transform = '';
+  }, 220);
+}
+
+poster.addEventListener('mouseenter', handlePosterEnter);
+poster.addEventListener('mouseleave', handlePosterLeave);
+poster.addEventListener('mousemove', handlePosterMove);
+splitTitleIntoLetters();
+for (const car of cars) {
+  const zone = document.getElementById(car.boostZone);
+  zone.addEventListener('mouseenter', handleBoostEnter);
+  zone.addEventListener('mouseleave', handleBoostLeave);
+}
+messageEl.addEventListener('mouseenter', handleMessageEnter);
+messageEl.addEventListener('mouseleave', handleMessageLeave);
+for (const el of partnerEls) {
+  el.addEventListener('mouseenter', handlePartnerEnter);
+  el.addEventListener('mouseleave', handlePartnerLeave);
+}
+window.addEventListener('resize', fitPoster);
+
+/* Pantallas táctiles: tocar el cartel da la salida (como mouseenter), arrastrar el dedo
+   mueve la cámara (como mousemove) y mantener pulsado un pedal es el turbo. Si no se
+   vuelve a tocar en un rato, la carrera termina como al sacar el ratón (mouseleave). */
+const TOUCH_IDLE = 9000;
+let touchIdleTimer = 0;
+
+function handlePosterTouch(event) {
+  const t = event.touches[0];
+  if (!t) return;
+  handlePosterEnter();
+  handlePosterMove(t);
+  clearTimeout(touchIdleTimer);
+  touchIdleTimer = setTimeout(handlePosterLeave, TOUCH_IDLE);
+}
+
+function handlePedalTouchStart(event) {
+  event.preventDefault(); // que no haga scroll ni simule clics
+  handleBoostEnter(event);
+  handlePosterTouch(event);
+}
+
+function handlePedalTouchEnd(event) {
+  event.preventDefault();
+  handleBoostLeave(event);
+}
+
+poster.addEventListener('touchstart', handlePosterTouch, { passive: true });
+poster.addEventListener('touchmove', handlePosterTouch, { passive: true });
+for (const car of cars) {
+  const zone = document.getElementById(car.boostZone);
+  zone.addEventListener('touchstart', handlePedalTouchStart, { passive: false });
+  zone.addEventListener('touchend', handlePedalTouchEnd, { passive: false });
+  zone.addEventListener('touchcancel', handlePedalTouchEnd, { passive: false });
+}
+
+/* ---------- Bucle ---------- */
 
 const clock = new THREE.Clock();
 
-function animate() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+function step(dt) {
   state.time += dt;
+  updatePhase(dt);
+  updateCars(dt);
+  updateConfetti(dt);
+  updateSnow(dt);
+  updateScene(dt);
+  updateXmasLights(state.time);
+  updatePedals(dt);
+}
 
-  updateCycle(dt);
-  updateBrainMotion(dt);
-  updateBrainPetals(dt);
-  updateFallingPetals(dt);
-  updateStem();
-  updateDarkness();
-  updateBrainScreen();
-  updateEyes(dt);
-  updateStare();
-  updateShake(dt);
-  updateParallax();
-  updateLetters(dt);
-  updateFlatPetals(dt);
-  updateShatter(dt);
-
+function frame() {
+  step(Math.min(clock.getDelta(), 0.05));
   renderer.render(scene, camera);
-  if (state.pendingShatter) {
-    state.pendingShatter = false;
-    startShatter();
-  }
-  requestAnimationFrame(animate);
+  requestAnimationFrame(frame);
 }
 
-function init() {
-  fitPoster();
-  buildTitle();
-  setupPetalCanvas();
-  setupEyeCanvas();
-  setupShatterCanvas();
-  createEyes();
-  initScene();
+fitPoster();
+updateCars(0);
 
-  poster.addEventListener('mouseenter', handlePosterEnter);
-  poster.addEventListener('mouseleave', handlePosterLeave);
-  poster.addEventListener('mousemove', handlePosterMove);
-  window.addEventListener('resize', () => {
-    fitPoster();
-    measureLetters();
-  });
-
-  // Medimos las letras cuando la tipografía ya está cargada
-  document.fonts.ready.then(measureLetters);
-
-  animate();
+// Atajo para pruebas: ?sim=3 simula 3 s de carrera con el ratón encima
+const simMatch = location.search.match(/[?&]sim=([\d.]+)/);
+if (simMatch) {
+  state.hover = true;
+  for (let t = 0; t < parseFloat(simMatch[1]); t += 1 / 60) step(1 / 60);
 }
 
-init();
+requestAnimationFrame(frame);

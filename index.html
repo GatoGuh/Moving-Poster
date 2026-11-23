@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>No solo las rosas decaen · 21 de diciembre</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23ff5c8f'/></svg>">
+  <title>Que empiece el juego para todos · 21 de diciembre · Fundación ITACA</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='14' y='38' width='72' height='50' fill='%23e8233f'/><rect x='44' y='38' width='12' height='50' fill='%23ffc93c'/><rect x='8' y='26' width='84' height='14' fill='%23e8233f'/></svg>">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,45 +16,92 @@
 
   <div class="stage">
     <!-- Cartel 848 × 1200 px (A3 adaptado a pantalla) -->
-    <main class="poster" id="poster" aria-label="Cartel: No solo las rosas decaen">
+    <main class="poster" id="poster" aria-label="Cartel: Que empiece el juego para todos. Un juguete también es un derecho.">
 
-      <!-- Fondo: oscuridad y ojos turbios que miran al cerebro -->
-      <div class="layer layer--dark" id="darkLayer"></div>
-      <canvas class="layer layer--eyes" id="eyeCanvas"></canvas>
-
-      <!-- Capa 1: escena 3D (cerebro-rosa con three.js) -->
+      <!-- Capa 1: escena 3D (caja de regalo y circuito con three.js) -->
       <div class="layer layer--scene" id="sceneLayer">
-        <canvas id="brainCanvas"></canvas>
+        <canvas id="sceneCanvas"></canvas>
       </div>
-
-      <!-- Ojo grande que aparece donde estaba el cerebro antes de romperse el cristal -->
-      <canvas class="layer layer--stare" id="stareCanvas"></canvas>
 
       <!-- Capa 2: cabecera (tema y fecha) -->
       <div class="layer layer--meta" id="metaLayer">
         <header class="meta-top">
-          <p class="topic">Enfermedades<br>neurodegenerativas</p>
+          <p class="topic">Regalos de Navidad<br>contra la exclusión</p>
+          <p class="org">Fundación ITACA</p>
           <p class="date"><span class="date__day">21</span><br>de diciembre</p>
         </header>
       </div>
 
-      <!-- Capa 3: titular (cada letra se genera desde main.js) -->
+      <!-- Capa 3: titular -->
       <div class="layer layer--title" id="titleLayer">
-        <h1 class="title" id="title" data-lines="No solo|las rosas|decaen.">No solo las rosas decaen.</h1>
+        <h1 class="title" id="title">
+          <span class="title__line">Que empiece</span>
+          <span class="title__line">el juego</span>
+          <span class="title__line">para todos.</span>
+        </h1>
       </div>
 
-      <!-- Capa 4: pétalos que se desprenden de las letras -->
-      <canvas class="layer layer--petals" id="petalCanvas"></canvas>
+      <!-- Capa: marco dorado del cartel, con ornamentos 3D en las esquinas (las imágenes las
+           genera main.js con three.js) -->
+      <div class="layer layer--frame" aria-hidden="true">
+        <img class="frame__corner frame__corner--top frame__corner--left" alt="">
+        <img class="frame__corner frame__corner--top frame__corner--right" alt="">
+        <img class="frame__corner frame__corner--bottom frame__corner--left" alt="">
+        <img class="frame__corner frame__corner--bottom frame__corner--right" alt="">
+      </div>
 
-      <!-- Capa 5: cristales de la pantalla rota (vuelta al inicio) -->
-      <canvas class="layer layer--shatter" id="shatterCanvas"></canvas>
+      <!-- Capa: pedales de turbo en los laterales (con el ratón encima, su coche acelera) -->
+      <div class="layer layer--boost">
+        <div class="boost boost--left" id="boostLeft" style="--boost-color: #ff5fa8" aria-label="Turbo del coche rosa">
+          <!-- la cartela y el pedal 3D (un <canvas> con three.js) los crea main.js aquí -->
+        </div>
+        <div class="boost boost--right" id="boostRight" style="--boost-color: #8a4dff" aria-label="Turbo del coche morado">
+          <!-- la cartela y el pedal 3D (un <canvas> con three.js) los crea main.js aquí -->
+        </div>
+      </div>
+
+      <!-- Capa 4: mensaje de sensibilización, pie con semáforo y entidades colaboradoras -->
+      <div class="layer layer--foot" id="footLayer">
+        <aside class="message" id="message">
+          <img class="message__crest" id="messageCrest" alt="" aria-hidden="true">
+          <p class="message__claim">Un juguete también es un <em>derecho.</em></p>
+          <p class="message__body">
+            Muchos niños y niñas en riesgo de exclusión no tendrán ningún
+            regalo esta Navidad. Con tu donación, la Fundación ITACA los compra por ti.
+          </p>
+          <p class="message__count">Regalos entregados <strong id="giftCount">0</strong></p>
+          <!-- Llamada a donar (texto del cartel, no un botón) -->
+          <p class="donate">
+            <span class="donate__main">Dona un regalo</span>
+            <span class="donate__sub">El 21 de diciembre, cada euro<br>se convierte en un juguete.</span>
+          </p>
+        </aside>
+
+        <footer class="meta-bottom">
+          <p class="hint" id="hint">Pasa el ratón para dar la salida</p>
+          <div class="partners" id="partners">
+            <span class="partners__label">Colaboran</span>
+            <!-- En reposo los logos se ven en blanco; al pasar el ratón recuperan su color.
+                 data-chip: color de la placa que aparece detrás (para logos oscuros) -->
+            <span class="partner partner--itaca">
+              <img src="Imgs/Logo_Itaca.webp" alt="Fundación ITACA">
+            </span>
+            <span class="partner partner--planeta" data-chip="#f7efe0">
+              <img src="Imgs/logo_planetafp.png.webp" alt="PlanetaFP">
+            </span>
+          </div>
+          <div class="lights" id="lights" aria-hidden="true">
+            <span class="light"></span><span class="light"></span><span class="light"></span>
+          </div>
+        </footer>
+      </div>
 
     </main>
   </div>
 
   <!-- three.js r128 en local: funciona abriendo el archivo directamente y sin conexión -->
   <script src="lib/three.min.js"></script>
-  <script src="brain-points.js"></script>
+  <script src="logos-data.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
